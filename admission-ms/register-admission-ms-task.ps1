@@ -37,7 +37,7 @@ param(
 )
 
 $RepoRoot    = 'c:\neldevsrc\Github\sis-services'
-$WrapperPath = 'C:\neldevsrc\Github\TaskScheduler\admission-ms\run-admission-ms.ps1'
+$WrapperPath = Join-Path $PSScriptRoot 'run-admission-ms.ps1'
 
 if ($Unregister) {
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {

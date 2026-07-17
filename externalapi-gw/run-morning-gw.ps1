@@ -8,7 +8,7 @@ $RepoRoot      = 'c:\neldevsrc\Github\sis-externalapi'
 # Relocated out of the repo: this wrapper + its prompt/logs/lock now live under the
 # central TaskScheduler folder. $RepoRoot still points at the sis-externalapi checkout
 # that claude operates on; only the scheduler-side artifacts moved here.
-$ScheduledDir  = 'C:\neldevsrc\Github\TaskScheduler\externalapi-gw'
+$ScheduledDir  = $PSScriptRoot   # this folder — logs/prompt/lock live alongside the wrapper
 $LogDir        = Join-Path $ScheduledDir 'logs'
 $PromptFile    = Join-Path $ScheduledDir 'morning-gw-prompt.md'
 $ClaudeCmd     = "$env:APPDATA\npm\claude.cmd"

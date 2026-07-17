@@ -31,7 +31,7 @@ param(
 )
 
 $RepoRoot    = 'c:\neldevsrc\Github\sis-externalapi'
-$WrapperPath = 'C:\neldevsrc\Github\TaskScheduler\gw-pr-review\run-pr-review.ps1'
+$WrapperPath = Join-Path $PSScriptRoot 'run-pr-review.ps1'
 
 if ($Unregister) {
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {

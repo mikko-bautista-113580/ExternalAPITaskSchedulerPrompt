@@ -1,0 +1,6 @@
+# Per-run task logs (rotated locally, not source)
+logs/
+**/logs/
+
+# Runtime lock files held by the wrappers
+*.lock

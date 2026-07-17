@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Continue'
 
 $RepoRoot     = 'c:\neldevsrc\Github\sis-externalapi'
-$ScheduledDir = 'C:\neldevsrc\Github\TaskScheduler\gw-pr-review'   # automation files (moved out of the repo)
+$ScheduledDir = $PSScriptRoot   # this folder — automation files live alongside the wrapper
 $LogDir       = Join-Path $ScheduledDir 'logs'
 $PromptFile   = Join-Path $ScheduledDir 'pr-review-prompt.md'
 $TemplateFile = Join-Path $ScheduledDir 'pr-review-template.html'
@@ -63,7 +63,7 @@ if (-not $ghOk) {
     Write-Milestone 'X' "gh CLI not authenticated -- aborting."
     Write-Log "FATAL: gh CLI is not authenticated for nelnet-nbs."
     Write-Log "       Fix once (interactively): gh auth login  (choose GitHub.com > HTTPS > browser)"
-    Write-Log "       then authorize the token for the 'nelnet-nbs' org SSO. See C:\neldevsrc\Github\TaskScheduler\gw-pr-review\README-pr-review.md."
+    Write-Log "       then authorize the token for the 'nelnet-nbs' org SSO. See $ScheduledDir\README-pr-review.md."
     exit 1
 }
 

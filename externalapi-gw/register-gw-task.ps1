@@ -38,7 +38,7 @@ param(
 )
 
 $RepoRoot    = 'c:\neldevsrc\Github\sis-externalapi'
-$WrapperPath = 'C:\neldevsrc\Github\TaskScheduler\externalapi-gw\run-morning-gw.ps1'
+$WrapperPath = Join-Path $PSScriptRoot 'run-morning-gw.ps1'
 
 if ($Unregister) {
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
