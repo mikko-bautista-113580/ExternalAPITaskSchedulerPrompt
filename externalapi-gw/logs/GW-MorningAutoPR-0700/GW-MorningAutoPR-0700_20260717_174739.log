@@ -1,0 +1,5 @@
+[2026-07-17T17:47:39+08:00] === morning-gw run started (task=GW-MorningAutoPR-0700) ===
+[2026-07-17T17:47:39+08:00] Repo: c:\neldevsrc\Github\sis-externalapi
+[2026-07-17T17:47:39+08:00] Log:  C:\neldevsrc\Github\TaskScheduler\externalapi-gw\logs\GW-MorningAutoPR-0700\GW-MorningAutoPR-0700_20260717_174739.log
+[2026-07-17T17:47:39+08:00] Tail this log live:  Get-Content -Wait -Path "C:\neldevsrc\Github\TaskScheduler\externalapi-gw\logs\GW-MorningAutoPR-0700\GW-MorningAutoPR-0700_20260717_174739.log"
+[2026-07-17T17:47:40+08:00] ABORT: another scheduled run is already in progress (lock C:\neldevsrc\Github\TaskScheduler\externalapi-gw\.morning-gw.lock, age 7.9 min). Exiting without doing anything.

@@ -1,0 +1,22 @@
+[2026-07-16T12:00:02+08:00] === pr-review run started (task=GW-PRReview, model=opus) ===
+[2026-07-16T12:00:02+08:00] Repo:   c:\neldevsrc\Github\sis-externalapi
+[2026-07-16T12:00:02+08:00] Output: C:\Users\lbautist\Downloads\PR Review
+[2026-07-16T12:00:02+08:00] Log:    C:\neldevsrc\Github\TaskScheduler\gw-pr-review\logs\GW-PRReview\GW-PRReview_20260716_120002.log
+[2026-07-16T12:00:02+08:00] Tail this log live:  Get-Content -Wait -Path "C:\neldevsrc\Github\TaskScheduler\gw-pr-review\logs\GW-PRReview\GW-PRReview_20260716_120002.log"
+[2026-07-16T12:00:03+08:00] gh auth status:
+github.com
+  Γ£ô Logged in to github.com account mikko-bautista-113580 (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token: gho_************************************
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+[2026-07-16T12:00:03+08:00] Branch before: story/242289_242291   HEAD before: cdbb14e96ff5e73e7863d4476d3ca9993e61bc82
+[2026-07-16T12:00:03+08:00] Fetching origin (prune) ...
+[2026-07-16T12:00:07+08:00] [git fetch] From https://github.com/nelnet-nbs/sis-externalapi
+[2026-07-16T12:00:07+08:00] [git fetch]    e37d0e54..de6dbf67  story/295251 -> origin/story/295251
+2026-07-16T12:00:08+08:00    === i No un-reviewed eligible PRs -- every one already has a report. Not launching claude (1 PR = 1 HTML).
+[2026-07-16T12:00:08+08:00] Skipping claude launch -- nothing new to review (all eligible PRs already have a report).
+[2026-07-16T12:00:08+08:00] Read-only guarantee OK: still on story/242289_242291 @ cdbb14e96ff5e73e7863d4476d3ca9993e61bc82.
+[2026-07-16T12:00:08+08:00] No new report files this run (nothing to review, or all eligible PRs already have a report).
+[2026-07-16T12:00:08+08:00] Lock released.
+[2026-07-16T12:00:08+08:00] === pr-review run finished (task=GW-PRReview exit=0) ===

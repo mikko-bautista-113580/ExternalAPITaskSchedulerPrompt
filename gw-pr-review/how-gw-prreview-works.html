@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How GW-PRReview Works</title>
+<style>
+:root{
+  --bg:#0F172A;--surface:#1E293B;--surface2:#334155;--border:#475569;
+  --text:#F1F5F9;--text2:#94A3B8;--text3:#64748B;--accent:#818CF8;--accent2:#6366F1;
+  --green:#10B981;--green-bg:rgba(16,185,129,.12);
+  --yellow:#F59E0B;--yellow-bg:rgba(245,158,11,.12);
+  --orange:#F97316;--orange-bg:rgba(249,115,22,.12);
+  --red:#EF4444;--red-bg:rgba(239,68,68,.12);
+  --blue:#3B82F6;--blue-bg:rgba(59,130,246,.12);
+  --radius:14px;--shadow:0 6px 30px rgba(0,0,0,.35);
+  --mono:'Cascadia Code','JetBrains Mono',Consolas,ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh;background-image:radial-gradient(circle at 15% 0%,rgba(99,102,241,.08),transparent 40%),radial-gradient(circle at 85% 10%,rgba(59,130,246,.06),transparent 45%)}
+.wrap{max-width:1180px;margin:0 auto;padding:34px 24px 60px}
+.mono{font-family:var(--mono)}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);font-weight:700;margin:40px 0 16px;display:flex;align-items:center;gap:10px}
+h2::before{content:'';width:22px;height:2px;background:var(--accent);border-radius:2px}
+
+/* Hero */
+.hero{position:relative;padding:44px;border-radius:18px;background:linear-gradient(135deg,#312E81 0%,#4338CA 50%,#6366F1 100%);overflow:hidden;box-shadow:var(--shadow)}
+.hero::before{content:'';position:absolute;top:-40%;right:-10%;width:420px;height:420px;background:radial-gradient(circle,rgba(255,255,255,.10),transparent 70%);border-radius:50%}
+.hero *{position:relative;z-index:1}
+.hero .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#C7D2FE;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);padding:5px 12px;border-radius:20px;margin-bottom:14px}
+.hero h1{font-size:30px;font-weight:800;letter-spacing:-.6px;margin-bottom:8px}
+.hero p{color:rgba(255,255,255,.82);font-size:15px;max-width:720px}
+.hero .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.hero .chip{font-size:12px;font-weight:600;color:#E0E7FF;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.15);padding:6px 12px;border-radius:10px}
+
+/* Schedule strip */
+.sched{display:grid;grid-template-columns:110px 1fr;gap:14px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px}
+.sched .lead{font-weight:700;font-size:14px}
+.sched .lead span{display:block;color:var(--text3);font-size:11px;font-weight:600;margin-top:3px}
+.week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.day{border-radius:10px;border:1px solid var(--border);padding:8px 6px;text-align:center;background:var(--surface2)}
+.day.off{opacity:.4}
+.day .dn{font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px}
+.slot{font-size:10px;font-weight:600;color:var(--accent);background:rgba(129,140,248,.14);border-radius:5px;padding:2px 0;margin:3px 0}
+.day.off .slot{visibility:hidden}
+
+/* Pipeline */
+.pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+.stage{flex:1 1 180px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 18px;position:relative;transition:transform .15s,box-shadow .15s}
+.stage:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
+.stage .num{position:absolute;top:-12px;left:18px;width:26px;height:26px;border-radius:50%;background:var(--accent2);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.stage .ico{font-size:30px;margin-bottom:8px}
+.stage .st-title{font-size:15px;font-weight:700;margin-bottom:6px}
+.stage .st-desc{font-size:12.5px;color:var(--text2);margin-bottom:10px}
+.stage .st-file{font-size:11px;color:var(--accent);font-family:var(--mono);word-break:break-all;background:rgba(129,140,248,.10);border:1px solid rgba(129,140,248,.2);padding:5px 8px;border-radius:7px;display:inline-block}
+.arrow{flex:0 0 34px;display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:24px;font-weight:700}
+@media(max-width:860px){.pipe{flex-direction:column}.arrow{transform:rotate(90deg);height:26px}.stage{flex-basis:auto}}
+
+/* generic cards row */
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.card h3{font-size:15px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+@media(max-width:820px){.g2,.g3{grid-template-columns:1fr}}
+
+/* Engine detail flow */
+.flow{display:flex;flex-direction:column;gap:0}
+.step{display:grid;grid-template-columns:34px 1fr;gap:14px;padding:12px 0}
+.step .bullet{position:relative;display:flex;justify-content:center}
+.step .bullet::before{content:'';position:absolute;top:26px;bottom:-12px;width:2px;background:var(--border)}
+.step:last-child .bullet::before{display:none}
+.step .dot{width:30px;height:30px;border-radius:50%;background:var(--surface2);border:2px solid var(--accent);color:var(--accent);font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;z-index:1}
+.step .body{padding-top:2px}
+.step .s-t{font-size:14px;font-weight:600}
+.step .s-d{font-size:12.5px;color:var(--text2);margin-top:2px}
+.step code{font-family:var(--mono);font-size:11.5px;background:#0D1117;border:1px solid #21262D;color:#9FB4d6;padding:2px 6px;border-radius:5px}
+
+/* Filter pills */
+.pills{display:flex;flex-direction:column;gap:10px}
+.pill{display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:11px 14px}
+.pill .ck{width:22px;height:22px;border-radius:50%;background:var(--green-bg);color:var(--green);font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid rgba(16,185,129,.3)}
+.pill .pt{font-size:13.5px}
+.pill .pt b{color:var(--text)}
+.gate-note{font-size:12px;color:var(--text3);margin-top:12px}
+.gate-note b{color:var(--accent)}
+
+/* Recommendation ladder */
+.ladder{display:flex;flex-direction:column;gap:10px}
+.rung{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;border-radius:11px;padding:13px 16px;border:1px solid}
+.rung .cond{font-family:var(--mono);font-size:12px;font-weight:600}
+.rung .verdict{font-size:14px;font-weight:800;letter-spacing:.3px}
+.rung .ic{font-size:22px}
+.r-reject{background:var(--red-bg);border-color:rgba(239,68,68,.3)}.r-reject .verdict{color:var(--red)}
+.r-changes{background:var(--orange-bg);border-color:rgba(249,115,22,.3)}.r-changes .verdict{color:var(--orange)}
+.r-comments{background:var(--yellow-bg);border-color:rgba(245,158,11,.3)}.r-comments .verdict{color:var(--yellow)}
+.r-approve{background:var(--green-bg);border-color:rgba(16,185,129,.3)}.r-approve .verdict{color:var(--green)}
+
+/* Guarantees */
+.guard{background:linear-gradient(135deg,rgba(16,185,129,.08),rgba(59,130,246,.06));border:1px solid rgba(16,185,129,.3)}
+.guard ul{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 24px;margin-top:6px}
+.guard li{font-size:13px;color:var(--text2);padding-left:26px;position:relative}
+.guard li::before{content:'🔒';position:absolute;left:0;top:1px;font-size:13px}
+.guard li b{color:var(--text)}
+@media(max-width:820px){.guard ul{grid-template-columns:1fr}}
+
+/* File map */
+.files{width:100%;border-collapse:collapse}
+.files th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);padding:8px 12px;background:var(--surface2)}
+.files td{padding:10px 12px;font-size:13px;border-top:1px solid rgba(71,85,105,.5);vertical-align:top}
+.files td.fn{font-family:var(--mono);font-size:12px;color:var(--accent);white-space:nowrap}
+.files td.role{color:var(--text2)}
+
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--text3)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dotc{width:11px;height:11px;border-radius:50%;display:inline-block}
+.footer{text-align:center;color:var(--text3);font-size:12px;margin-top:44px;padding-top:22px;border-top:1px solid var(--border)}
+.footer b{color:var(--text2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <span class="tag">SIS External API · Automation</span>
+    <h1>How <span class="mono">GW-PRReview</span> Works</h1>
+    <p>A Windows scheduled task that runs a <b>read-only, Claude-powered code review</b> of Junie &amp; Paul's open pull requests six times a day, and drops a self-contained <b>HTML report per PR</b> in your Downloads folder for you to validate — it never comments on or approves anything itself.</p>
+    <div class="chips">
+      <span class="chip">⏰ Mon–Fri · 6×/day</span>
+      <span class="chip">🔎 Full semantic review</span>
+      <span class="chip">📄 HTML you validate</span>
+      <span class="chip">🔒 Read-only</span>
+    </div>
+  </div>
+
+  <!-- SCHEDULE -->
+  <h2>When it runs</h2>
+  <div class="sched">
+    <div class="lead">6 slots / day<span>08 · 10 · 12 · 14 · 16 · 18 (local)</span></div>
+    <div class="week">
+      <div class="day off"><div class="dn">SUN</div></div>
+      <div class="day"><div class="dn">MON</div><div class="slot">08</div><div class="slot">10</div><div class="slot">12</div><div class="slot">14</div><div class="slot">16</div><div class="slot">18</div></div>
+      <div class="day"><div class="dn">TUE</div><div class="slot">08</div><div class="slot">10</div><div class="slot">12</div><div class="slot">14</div><div class="slot">16</div><div class="slot">18</div></div>
+      <div class="day"><div class="dn">WED</div><div class="slot">08</div><div class="slot">10</div><div class="slot">12</div><div class="slot">14</div><div class="slot">16</div><div class="slot">18</div></div>
+      <div class="day"><div class="dn">THU</div><div class="slot">08</div><div class="slot">10</div><div class="slot">12</div><div class="slot">14</div><div class="slot">16</div><div class="slot">18</div></div>
+      <div class="day"><div class="dn">FRI</div><div class="slot">08</div><div class="slot">10</div><div class="slot">12</div><div class="slot">14</div><div class="slot">16</div><div class="slot">18</div></div>
+      <div class="day off"><div class="dn">SAT</div></div>
+    </div>
+  </div>
+
+  <!-- PIPELINE -->
+  <h2>The pipeline · end to end</h2>
+  <div class="pipe">
+    <div class="stage">
+      <div class="num">1</div><div class="ico">⏰</div>
+      <div class="st-title">Task Scheduler</div>
+      <div class="st-desc">Fires the task at each weekday slot while you're logged on.</div>
+      <div class="st-file">GW-PRReview</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="num">2</div><div class="ico">🧰</div>
+      <div class="st-title">Wrapper</div>
+      <div class="st-desc">Checks <span class="mono">gh</span> auth, fetches origin (read-only), takes a lock, launches headless Claude.</div>
+      <div class="st-file">run-pr-review.ps1</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="num">3</div><div class="ico">🔎</div>
+      <div class="st-title">Review engine</div>
+      <div class="st-desc">Claude finds eligible PRs, reads whole changed files, reviews vs your standards.</div>
+      <div class="st-file">pr-review-prompt.md</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="num">4</div><div class="ico">📄</div>
+      <div class="st-title">HTML report</div>
+      <div class="st-desc">Findings injected into the template — one file per PR, reviewed once.</div>
+      <div class="st-file">Downloads\PR Review\</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="num">5</div><div class="ico">🧑‍💻</div>
+      <div class="st-title">You validate</div>
+      <div class="st-desc">Open it, judge the findings, copy comments / dismiss, then act on GitHub yourself.</div>
+      <div class="st-file">manual on GitHub</div>
+    </div>
+  </div>
+
+  <!-- ENGINE DETAIL + FILTER -->
+  <h2>Inside the review engine (stage 3)</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h3>🔬 Per-run sequence</h3>
+      <div class="flow">
+        <div class="step"><div class="bullet"><div class="dot">A</div></div><div class="body">
+          <div class="s-t">List open PRs</div>
+          <div class="s-d"><code>gh pr list --repo nelnet-nbs/sis-externalapi</code></div></div></div>
+        <div class="step"><div class="bullet"><div class="dot">B</div></div><div class="body">
+          <div class="s-t">Apply the eligibility gate</div>
+          <div class="s-d">Only PRs that pass all 5 conditions (right →) survive.</div></div></div>
+        <div class="step"><div class="bullet"><div class="dot">C</div></div><div class="body">
+          <div class="s-t">Read the whole change, not just the diff</div>
+          <div class="s-d"><code>gh pr diff</code> + <code>git show &lt;head&gt;:file</code> for full-file context.</div></div></div>
+        <div class="step"><div class="bullet"><div class="dot">D</div></div><div class="body">
+          <div class="s-t">Review against the rulebook</div>
+          <div class="s-d"><code>pr-review-standards.md</code> + GET conventions + the StudentsHomeroom reference.</div></div></div>
+        <div class="step"><div class="bullet"><div class="dot">E</div></div><div class="body">
+          <div class="s-t">Score → findings + recommendation</div>
+          <div class="s-d">error / warning / info, grouped by category.</div></div></div>
+        <div class="step"><div class="bullet"><div class="dot">F</div></div><div class="body">
+          <div class="s-t">Render &amp; save</div>
+          <div class="s-d">Inject JSON into the template → <code>PR-&lt;n&gt;-&lt;slug&gt;.html</code></div></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🚦 Eligibility gate — <span style="color:var(--text3);font-weight:600;font-size:12px">reviewed only if ALL true</span></h3>
+      <div class="pills">
+        <div class="pill"><div class="ck">✓</div><div class="pt"><b>Not a draft</b></div></div>
+        <div class="pill"><div class="ck">✓</div><div class="pt">Authored by / assigned to <b>Junie</b> or <b>Paul</b></div></div>
+        <div class="pill"><div class="ck">✓</div><div class="pt">Updated in the <b>last 7 days</b></div></div>
+        <div class="pill"><div class="ck">✓</div><div class="pt">You <b>haven't approved</b> it yet</div></div>
+        <div class="pill"><div class="ck">✓</div><div class="pt"><b>Not reviewed yet</b> — no report exists <span style="color:var(--text3)">(1 PR = 1 HTML)</span></div></div>
+      </div>
+      <div class="gate-note"><b>One report per PR.</b> A reviewed PR is skipped — the wrapper won't even launch Claude when there's nothing new. To re-review, delete its HTML from the output folder.</div>
+    </div>
+  </div>
+
+  <!-- RECOMMENDATION -->
+  <h2>How the verdict is decided</h2>
+  <div class="card">
+    <div class="ladder">
+      <div class="rung r-reject"><div class="ic">❌</div><div class="cond">errors &gt; 0</div><div class="verdict">DO NOT APPROVE</div></div>
+      <div class="rung r-changes"><div class="ic">⚠️</div><div class="cond">warnings &gt; 3</div><div class="verdict">REQUEST CHANGES</div></div>
+      <div class="rung r-comments"><div class="ic">💬</div><div class="cond">warnings ≥ 1</div><div class="verdict">APPROVE WITH COMMENTS</div></div>
+      <div class="rung r-approve"><div class="ic">✅</div><div class="cond">otherwise</div><div class="verdict">APPROVE</div></div>
+    </div>
+    <div class="legend">
+      <span><span class="dotc" style="background:var(--red)"></span>error = REQUIRED rule broken</span>
+      <span><span class="dotc" style="background:var(--yellow)"></span>warning = RECOMMENDED</span>
+      <span><span class="dotc" style="background:var(--blue)"></span>info = nice-to-have</span>
+    </div>
+  </div>
+
+  <!-- GUARANTEES -->
+  <h2>Safety guarantees</h2>
+  <div class="card guard">
+    <h3>🔒 It looks, it never touches</h3>
+    <ul>
+      <li><b>No PR writes</b> — never comments, approves, or requests changes on GitHub.</li>
+      <li><b>No git writes</b> — no branch switch, commit, push, or stash.</li>
+      <li><b>Only output = HTML reports</b> in <span class="mono">Downloads\PR Review\</span>.</li>
+      <li><b>Verified read-only</b> — the wrapper asserts branch + HEAD are unchanged after each run.</li>
+      <li><b>gh-gated</b> — aborts cleanly if <span class="mono">gh</span> isn't authenticated.</li>
+      <li><b>No overlap</b> — <span class="mono">IgnoreNew</span> + a 90-min lock file.</li>
+    </ul>
+  </div>
+
+  <!-- FILE MAP -->
+  <h2>The moving parts</h2>
+  <div class="card" style="padding:0;overflow-x:auto">
+    <table class="files">
+      <thead><tr><th>File (in <span class="mono">C:\neldevsrc\Github\TaskScheduler\gw-pr-review\</span>)</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">pr-review-prompt.md</td><td class="role">The review engine — the instructions Claude follows.</td></tr>
+        <tr><td class="fn">pr-review-standards.md</td><td class="role">The rulebook — REQUIRED (error) / RECOMMENDED (warning) / NICE-TO-HAVE (info).</td></tr>
+        <tr><td class="fn">pr-review-template.html</td><td class="role">Report shell — findings JSON is injected at a sentinel, then saved.</td></tr>
+        <tr><td class="fn">run-pr-review.ps1</td><td class="role">Wrapper — gh gate, read-only fetch, launches headless Claude, read-only guard.</td></tr>
+        <tr><td class="fn">register-pr-review-task.ps1</td><td class="role">Creates / removes the scheduled task (6 weekday triggers).</td></tr>
+        <tr><td class="fn">README-pr-review.md</td><td class="role">Setup, tuning, and troubleshooting.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- YOUR TURN -->
+  <h2>What you do with a report</h2>
+  <div class="grid g3">
+    <div class="card"><h3>① Read the verdict</h3><div class="st-desc" style="color:var(--text2);font-size:13px">A color-coded banner (reject / changes / comments / approve) with total error·warning·info counts up top.</div></div>
+    <div class="card"><h3>② 📋 Copy comment</h3><div class="st-desc" style="color:var(--text2);font-size:13px">Each finding gives a ready-to-paste markdown comment (file:line + issue + suggestion + code). Nothing is sent — you paste it into GitHub if you agree.</div></div>
+    <div class="card"><h3>③ ✕ Dismiss</h3><div class="st-desc" style="color:var(--text2);font-size:13px">Hide a finding you disagree with; remembered per PR + SHA in your browser.</div></div>
+  </div>
+
+  <div class="footer">
+    <b>GW-PRReview</b> · read-only PR review for <span class="mono">nelnet-nbs/sis-externalapi</span> · reports in <span class="mono">C:\Users\lbautist\Downloads\PR Review\</span><br>
+    Runs as you (Interactive token) only while logged on · needs a one-time <span class="mono">gh auth login</span> to go live.
+  </div>
+
+</div>
+</body>
+</html>

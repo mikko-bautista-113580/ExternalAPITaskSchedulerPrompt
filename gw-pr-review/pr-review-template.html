@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR Review</title>
+<!--
+  PR REVIEW REPORT TEMPLATE (JSON-driven, self-contained, offline-safe).
+
+  How it is used by the scheduled task:
+    1. The review prompt builds a `data` object (schema documented in
+       C:\neldevsrc\Github\TaskScheduler\gw-pr-review\pr-review-prompt.md -> "HTML data schema").
+    2. It replaces the sentinel  __PR_REVIEW_DATA__  in the <script id="pr-data">
+       island below with JSON.stringify(data), escaping "</" as "<\/".
+    3. It writes the result to
+       C:\Users\lbautist\Downloads\PR Review\PR-{number}-{slug}-{shortSha}.html
+
+  No external fonts/CDN. "Copy comment" uses the clipboard. "Comment on PR" posts an
+  inline review comment to the PR's code line via the GitHub REST API (needs a token,
+  entered once and stored only in this browser's localStorage). "Dismiss" persists
+  per-PR in localStorage.
+-->
+<style>
+:root{
+  --bg:#0F172A;--surface:#1E293B;--surface2:#334155;--border:#475569;
+  --text:#F1F5F9;--text2:#94A3B8;--text3:#64748B;--accent:#818CF8;
+  --green:#10B981;--green-bg:rgba(16,185,129,.12);
+  --yellow:#F59E0B;--yellow-bg:rgba(245,158,11,.12);
+  --red:#EF4444;--red-bg:rgba(239,68,68,.12);
+  --blue:#3B82F6;--blue-bg:rgba(59,130,246,.12);
+  --radius:12px;--shadow:0 4px 24px rgba(0,0,0,.3);
+  --mono:'Cascadia Code','JetBrains Mono',Consolas,ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+.container{max-width:1200px;margin:0 auto;padding:32px 24px}
+code,pre,.mono{font-family:var(--mono)}
+
+/* Header */
+.header{position:relative;padding:40px;border-radius:16px;margin-bottom:28px;background:linear-gradient(135deg,#312E81 0%,#4338CA 50%,#6366F1 100%);overflow:hidden}
+.header::before{content:'';position:absolute;top:-50%;right:-20%;width:400px;height:400px;background:radial-gradient(circle,rgba(255,255,255,.08) 0%,transparent 70%);border-radius:50%}
+.header *{position:relative;z-index:1}
+.header h1{font-size:24px;font-weight:800;letter-spacing:-.5px;margin-bottom:6px;word-break:break-word}
+.header .sub{color:rgba(255,255,255,.72);font-size:14px;font-weight:500}
+.header a{color:#C7D2FE;text-decoration:none}
+.header a:hover{color:#E0E7FF;text-decoration:underline}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:20px}
+.meta-item{background:rgba(255,255,255,.08);padding:12px 16px;border-radius:10px;border:1px solid rgba(255,255,255,.1)}
+.meta-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,.55);font-weight:600}
+.meta-value{font-size:14px;font-weight:600;color:#fff;margin-top:2px;word-break:break-word}
+
+/* Review banner */
+.reviewer{font-size:12px;color:var(--text3);margin-bottom:20px;padding:10px 16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.reviewer b{color:var(--text2)}
+
+/* Recommendation */
+.rec{padding:22px 26px;border-radius:var(--radius);margin-bottom:24px;display:flex;align-items:center;gap:18px;border:1px solid}
+.rec-approve{background:rgba(16,185,129,.08);border-color:rgba(16,185,129,.3)}
+.rec-comments{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3)}
+.rec-changes{background:rgba(249,115,22,.08);border-color:rgba(249,115,22,.3)}
+.rec-reject{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.3)}
+.rec-icon{font-size:38px;flex-shrink:0}
+.rec-title{font-size:19px;font-weight:800;letter-spacing:-.3px}
+.rec-desc{font-size:13px;color:var(--text2);margin-top:4px}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px}
+.stat{background:var(--surface);border-radius:var(--radius);padding:18px;text-align:center;border:1px solid var(--border)}
+.stat-num{font-size:34px;font-weight:800;letter-spacing:-1px}
+.stat-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);font-weight:600;margin-top:2px}
+.stat-total .stat-num{color:var(--accent)}
+.stat-error .stat-num{color:var(--red)}
+.stat-warn .stat-num{color:var(--yellow)}
+.stat-info .stat-num{color:var(--blue)}
+
+/* Sections */
+.section{background:var(--surface);border-radius:var(--radius);margin-bottom:14px;border:1px solid var(--border);overflow:hidden}
+.sec-header{padding:15px 20px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:12px;font-weight:600;font-size:14px}
+.sec-header:hover{background:var(--surface2)}
+.sec-toggle{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--surface2);font-size:10px;transition:transform .25s;flex-shrink:0}
+.sec-toggle.cl{transform:rotate(-90deg)}
+.sec-body.cl{display:none}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-left:6px}
+.badge-e{background:var(--red-bg);color:var(--red)}
+.badge-w{background:var(--yellow-bg);color:var(--yellow)}
+.badge-i{background:var(--blue-bg);color:var(--blue)}
+
+/* Findings */
+.finding{padding:16px 20px;border-bottom:1px solid rgba(71,85,105,.5);display:grid;grid-template-columns:auto 1fr;gap:14px;transition:opacity .3s}
+.finding:last-child{border-bottom:none}
+.finding.dismissed{opacity:.18}
+.sev{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:74px}
+.sev-badge{padding:4px 12px;border-radius:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.sev-e{background:var(--red-bg);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+.sev-w{background:var(--yellow-bg);color:var(--yellow);border:1px solid rgba(245,158,11,.2)}
+.sev-i{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
+.sev-cat{font-size:9px;color:var(--text3);text-align:center;font-weight:500}
+.finding-file{font-size:12px;color:var(--accent);font-family:var(--mono);margin-bottom:6px;word-break:break-all}
+.finding-msg{font-size:14px;font-weight:500;color:var(--text);margin-bottom:6px}
+.finding-sug{font-size:13px;color:var(--green);background:var(--green-bg);padding:10px 14px;border-radius:8px;border-left:3px solid var(--green);margin-bottom:8px}
+.finding-code{background:#0D1117;color:#E2E8F0;padding:14px 16px;border-radius:10px;font-size:12.5px;overflow-x:auto;line-height:1.6;border:1px solid #21262D;margin-bottom:8px;white-space:pre}
+
+/* Buttons */
+.btn-row{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap}
+.btn{padding:7px 14px;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid;transition:all .15s;font-family:inherit}
+.btn-comment{background:rgba(59,130,246,.12);color:var(--blue);border-color:rgba(59,130,246,.3)}
+.btn-comment:hover{background:rgba(59,130,246,.25)}
+.btn-copy{background:rgba(99,102,241,.12);color:var(--accent);border-color:rgba(99,102,241,.3)}
+.btn-copy:hover{background:rgba(99,102,241,.25)}
+.btn-dismiss{background:var(--surface2);color:var(--text3);border-color:var(--border)}
+.btn-dismiss:hover{background:rgba(71,85,105,.8)}
+.btn-restore{background:transparent;color:var(--text3);border-color:var(--border)}
+.btn.done{background:var(--green-bg);color:var(--green);border-color:rgba(16,185,129,.3)}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:-8px 0 24px}
+.btn-approve{background:var(--green-bg);color:var(--green);border-color:rgba(16,185,129,.4);font-size:13px;font-weight:700;padding:10px 20px}
+.btn-approve:hover{background:rgba(16,185,129,.22)}
+.actions-note{font-size:12px;color:var(--text3)}
+
+/* Files table */
+.ftable{width:100%;border-collapse:collapse}
+.ftable th{text-align:left;padding:10px 16px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);background:var(--surface2);font-weight:600}
+.ftable td{padding:9px 16px;font-size:13px;border-top:1px solid rgba(71,85,105,.5)}
+.ftable .fname{font-family:var(--mono);font-size:12px;word-break:break-all;color:var(--text2)}
+.add{color:var(--green);font-weight:700}
+.del{color:var(--red);font-weight:700}
+.status{font-size:10px;padding:3px 10px;border-radius:6px;font-weight:600;letter-spacing:.3px}
+.st-a{background:var(--green-bg);color:var(--green)}
+.st-m{background:var(--yellow-bg);color:var(--yellow)}
+.st-r{background:var(--red-bg);color:var(--red)}
+
+.no-issues{text-align:center;padding:56px 24px}
+.no-issues-icon{font-size:52px;margin-bottom:12px}
+.no-issues-text{font-size:20px;font-weight:700;color:var(--green)}
+.no-issues-sub{color:var(--text3);margin-top:6px}
+.footer{text-align:center;padding:26px;color:var(--text3);font-size:12px;border-top:1px solid var(--border);margin-top:20px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--green);color:#04120c;font-weight:700;font-size:13px;padding:12px 22px;border-radius:10px;box-shadow:var(--shadow);transition:transform .25s;z-index:50}
+.toast.show{transform:translateX(-50%) translateY(0)}
+@media(max-width:768px){.stats{grid-template-columns:repeat(2,1fr)}.meta{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+<div class="toast" id="toast"></div>
+
+<script type="application/json" id="pr-data">__PR_REVIEW_DATA__</script>
+
+<script>
+(function(){
+  var data;
+  try { data = JSON.parse(document.getElementById('pr-data').textContent); }
+  catch(e){ document.getElementById('app').innerHTML =
+    '<pre style="color:#EF4444">Report data failed to parse: '+String(e)+'</pre>'; return; }
+
+  var esc = function(s){ return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+
+  var recMeta = {
+    approve:{cls:'rec-approve',icon:'✅',desc:'This PR follows the coding standards. Safe to approve.'},
+    comments:{cls:'rec-comments',icon:'💬',desc:'Minor issues found. Approve but leave comments.'},
+    changes:{cls:'rec-changes',icon:'⚠️',desc:'Multiple warnings found. Request changes before approving.'},
+    reject:{cls:'rec-reject',icon:'❌',desc:'Critical issues found. Do not approve until resolved.'}
+  };
+  var sevCls = {error:'sev-e',warning:'sev-w',info:'sev-i'};
+  var sevOrder = {error:0,warning:1,info:2};
+
+  var s = data.summary || {total:0,errors:0,warnings:0,info:0,recommendation:'',recommendationClass:'approve'};
+  var rm = recMeta[s.recommendationClass] || recMeta.approve;
+  var findings = data.findings || [];
+  var files = data.files || [];
+  var h = '';
+
+  // Header
+  h += '<div class="header">'
+     + '<h1>PR #'+esc(data.pr_number)+': '+esc(data.pr_title)+'</h1>'
+     + '<div class="sub">Automated Code Review &mdash; SIS External API standards (full semantic review)</div>'
+     + '<div class="meta">'
+     +   '<div class="meta-item"><div class="meta-label">Author</div><div class="meta-value">'+esc(data.pr_author)+'</div></div>'
+     +   '<div class="meta-item"><div class="meta-label">Branch</div><div class="meta-value">'+esc(data.pr_head)+' &rarr; '+esc(data.pr_base)+'</div></div>'
+     +   '<div class="meta-item"><div class="meta-label">Changes</div><div class="meta-value"><span class="add">+'+esc(data.additions)+'</span> <span class="del">-'+esc(data.deletions)+'</span> in '+esc(data.changed_files_count)+' files</div></div>'
+     +   '<div class="meta-item"><div class="meta-label">Head SHA</div><div class="meta-value mono">'+esc(data.head_sha)+'</div></div>'
+     +   '<div class="meta-item"><div class="meta-label">Link</div><div class="meta-value"><a href="'+esc(data.pr_url)+'" target="_blank" rel="noopener">View on GitHub &rarr;</a></div></div>'
+     + '</div></div>';
+
+  // Reviewer / provenance
+  h += '<div class="reviewer">'
+     + '<span><b>Reviewed by:</b> '+esc(data.reviewer||'Claude (scheduled)')+'</span>'
+     + '<span><b>Generated:</b> '+esc(data.generated_at||'')+'</span>'
+     + '<span><b>PR updated:</b> '+esc(data.pr_updated_at||'')+'</span>'
+     + '</div>';
+
+  // Recommendation
+  h += '<div class="rec '+rm.cls+'"><div class="rec-icon">'+rm.icon+'</div>'
+     + '<div><div class="rec-title">'+esc(s.recommendation)+'</div>'
+     + '<div class="rec-desc">'+rm.desc+'</div></div></div>';
+
+  // PR-level actions
+  h += '<div class="actions">'
+     + '<button class="btn btn-approve" data-approve="1">✅ Approve this PR</button>'
+     + '<span class="actions-note">Approves PR #'+esc(data.pr_number)+' on GitHub — reviewing the diff yourself is optional.</span>'
+     + '</div>';
+
+  // Stats
+  h += '<div class="stats">'
+     + '<div class="stat stat-total"><div class="stat-num">'+esc(s.total)+'</div><div class="stat-label">Total</div></div>'
+     + '<div class="stat stat-error"><div class="stat-num">'+esc(s.errors)+'</div><div class="stat-label">Errors</div></div>'
+     + '<div class="stat stat-warn"><div class="stat-num">'+esc(s.warnings)+'</div><div class="stat-label">Warnings</div></div>'
+     + '<div class="stat stat-info"><div class="stat-num">'+esc(s.info)+'</div><div class="stat-label">Info</div></div>'
+     + '</div>';
+
+  // Findings grouped by category
+  if(findings.length === 0){
+    h += '<div class="section"><div class="no-issues"><div class="no-issues-icon">✅</div>'
+       + '<div class="no-issues-text">All Clear!</div>'
+       + '<div class="no-issues-sub">No coding-standard violations found in this PR.</div></div></div>';
+  } else {
+    var byCat = {};
+    findings.forEach(function(f,i){ f._id='f'+i; (byCat[f.category]=byCat[f.category]||[]).push(f); });
+    Object.keys(byCat).forEach(function(cat){
+      var items = byCat[cat].slice().sort(function(a,b){
+        return (sevOrder[a.severity]==null?9:sevOrder[a.severity]) - (sevOrder[b.severity]==null?9:sevOrder[b.severity]); });
+      var ec=items.filter(function(x){return x.severity==='error';}).length;
+      var wc=items.filter(function(x){return x.severity==='warning';}).length;
+      var ic=items.filter(function(x){return x.severity==='info';}).length;
+      var badges='';
+      if(ec)badges+='<span class="badge badge-e">'+ec+' error'+(ec>1?'s':'')+'</span>';
+      if(wc)badges+='<span class="badge badge-w">'+wc+' warning'+(wc>1?'s':'')+'</span>';
+      if(ic)badges+='<span class="badge badge-i">'+ic+' info</span>';
+      var sid='c_'+cat.replace(/\W/g,'');
+      h += '<div class="section"><div class="sec-header" data-toggle="'+sid+'">'
+         + '<span class="sec-toggle" id="t_'+sid+'">▼</span>'+esc(cat)+badges+'</div>'
+         + '<div class="sec-body" id="'+sid+'">';
+      items.forEach(function(f){
+        h += '<div class="finding" id="'+f._id+'"><div class="sev">'
+           + '<span class="sev-badge '+(sevCls[f.severity]||'sev-i')+'">'+esc(f.severity)+'</span>'
+           + '<span class="sev-cat">'+esc(f.skill||cat)+'</span></div><div>'
+           + '<div class="finding-file">'+esc(f.file)+(f.line?':'+esc(f.line):'')+'</div>'
+           + '<div class="finding-msg">'+esc(f.message)+'</div>';
+        if(f.suggestion) h += '<div class="finding-sug"><b>Suggestion:</b> '+esc(f.suggestion)+'</div>';
+        if(f.codeExample) h += '<pre class="finding-code">'+esc(f.codeExample)+'</pre>';
+        h += '<div class="btn-row">'
+           + '<button class="btn btn-comment" data-comment="'+f._id+'">💬 Comment on PR</button>'
+           + '<button class="btn btn-copy" data-copy="'+f._id+'">📋 Copy comment</button>'
+           + '<button class="btn btn-dismiss" data-dismiss="'+f._id+'">✕ Dismiss</button>'
+           + '</div></div></div>';
+      });
+      h += '</div></div>';
+    });
+  }
+
+  // Files changed
+  h += '<div class="section"><div class="sec-header" data-toggle="fl"><span class="sec-toggle cl" id="t_fl">▼</span>Files Changed ('+files.length+')</div>'
+     + '<div class="sec-body cl" id="fl"><table class="ftable"><thead><tr><th>File</th><th>Status</th><th>Changes</th></tr></thead><tbody>';
+  files.forEach(function(f){
+    var sc = f.status==='added'?'st-a':(f.status==='removed'?'st-r':'st-m');
+    h += '<tr><td class="fname">'+esc(f.filename)+'</td>'
+       + '<td><span class="status '+sc+'">'+esc(f.status)+'</span></td>'
+       + '<td><span class="add">+'+esc(f.additions)+'</span> <span class="del">-'+esc(f.deletions)+'</span></td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+
+  h += '<div class="footer">Generated '+esc(data.generated_at||'')+' &bull; SIS External API PR Review &bull; read-only, findings for your validation</div>';
+
+  var app = document.getElementById('app');
+  app.innerHTML = h;
+
+  // ---- interactivity ----
+  var LS_KEY = 'pr-review-dismissed-' + (data.pr_number||'x') + '-' + (data.head_sha||'x');
+  var dismissed = [];
+  try { dismissed = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); } catch(e){}
+  dismissed.forEach(function(id){ var el=document.getElementById(id); if(el) el.classList.add('dismissed'); });
+
+  function toast(msg){
+    var t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, 1600);
+  }
+  function findingById(id){ return findings.filter(function(f){return f._id===id;})[0]; }
+  function commentText(f){
+    var c = '**Automated review finding ('+f.severity+' — '+f.category+')**\n\n';
+    c += '**File:** `'+f.file+(f.line?':'+f.line:'')+'`\n\n';
+    c += '**Issue:** '+f.message+'\n';
+    if(f.suggestion) c += '\n**Suggestion:** '+f.suggestion+'\n';
+    if(f.codeExample) c += '\n```csharp\n'+f.codeExample+'\n```\n';
+    return c;
+  }
+
+  // owner/repo parsed from the PR URL, e.g. https://github.com/OWNER/REPO/pull/184
+  var repoSlug = (function(){
+    var m = /github\.com\/([^\/]+)\/([^\/]+)\/(?:pull|pulls)\//.exec(data.pr_url||'');
+    return m ? m[1]+'/'+m[2] : '';
+  })();
+  function ghToken(){
+    var t = localStorage.getItem('gh-token');
+    if(!t){
+      t = prompt('Enter a GitHub token to post PR comments.\n\n'
+        + 'Use a fine-grained PAT with "Pull requests: Read and write" on '
+        + (repoSlug||'this repo') + ' (a classic token with the "repo" scope also works).\n\n'
+        + 'It is stored only in this browser (localStorage) — never in the report file.');
+      if(t){ t=t.trim(); if(t) localStorage.setItem('gh-token', t); }
+    }
+    return t;
+  }
+  function approvePR(btn){
+    if(!repoSlug){ alert('Cannot determine owner/repo from the PR URL in this report.'); return; }
+    var msg = prompt('Approve PR #'+data.pr_number+' on GitHub?\n\n'
+      + 'Optional approval comment (leave blank for none). Click Cancel to abort.', '');
+    if(msg === null) return;  // cancelled
+    var tok = ghToken(); if(!tok){ alert('No token provided — cannot approve.'); return; }
+    var orig = btn.textContent; btn.textContent = 'Approving…'; btn.disabled = true;
+    var payload = { event: 'APPROVE' };
+    if(msg && msg.trim()) payload.body = msg.trim();
+    fetch('https://api.github.com/repos/'+repoSlug+'/pulls/'+data.pr_number+'/reviews', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+tok, 'Accept':'application/vnd.github+json',
+                'Content-Type':'application/json', 'X-GitHub-Api-Version':'2022-11-28' },
+      body: JSON.stringify(payload)
+    })
+    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, j:j}; }); })
+    .then(function(res){
+      if(res.ok){
+        btn.textContent = '✓ Approved'; btn.classList.add('done'); btn.disabled = true;
+        toast('PR #'+data.pr_number+' approved on GitHub');
+      } else {
+        if(res.status===401){ localStorage.removeItem('gh-token'); }
+        btn.textContent = orig; btn.disabled = false;
+        var m = (res.j && res.j.message) || 'unknown error';
+        if(res.status===401) m += '\n\nToken cleared — click again to re-enter it.';
+        else if(res.status===422) m += '\n\n(422 usually means you cannot approve your own PR, or GitHub rejected the review — check the PR.)';
+        alert('Approve failed ('+res.status+'): '+m);
+      }
+    })
+    .catch(function(err){
+      btn.textContent = orig; btn.disabled = false;
+      alert('Network/CORS error: '+err+'\n\nIf a browser CORS policy blocks the request, '
+        + 'serve this file via a local server instead of opening it as file://.');
+    });
+  }
+
+  function postComment(f, btn){
+    if(!repoSlug){ alert('Cannot determine owner/repo from the PR URL in this report.'); return; }
+    if(!confirm('Post this finding as a comment on PR #'+data.pr_number+'?\n\n'+f.message)) return;
+    var tok = ghToken(); if(!tok){ alert('No token provided — cannot post.'); return; }
+
+    var base = 'https://api.github.com/repos/'+repoSlug;
+    var authHeaders = { 'Authorization':'Bearer '+tok, 'Accept':'application/vnd.github+json',
+                        'X-GitHub-Api-Version':'2022-11-28' };
+    var postHeaders = Object.assign({ 'Content-Type':'application/json' }, authHeaders);
+    var orig = btn.textContent;
+    var busy  = function(){ btn.textContent='Posting…'; btn.disabled=true; };
+    var reset = function(){ btn.textContent=orig; btn.disabled=false; };
+    var ok    = function(inline){ btn.textContent='✓ Commented'; btn.classList.add('done'); btn.disabled=true;
+                  toast(inline ? 'Inline comment posted to the PR' : 'Comment posted to the PR'); };
+
+    function asJson(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, j:j}; }); }
+    function handleErr(res){
+      if(res.status===401){ localStorage.removeItem('gh-token'); }
+      reset();
+      var msg = (res.j && res.j.message) || 'unknown error';
+      if(res.status===401) msg += '\n\nToken cleared — click again to re-enter it.';
+      alert('Failed ('+res.status+'): '+msg);
+    }
+    function netErr(err){
+      reset();
+      alert('Network/CORS error: '+err+'\n\nIf a browser CORS policy blocks the request, '
+        + 'serve this file via a local server (e.g. "python -m http.server" in this folder) '
+        + 'instead of opening it as file://, or use "Copy comment".');
+    }
+    function postIssueComment(){
+      busy();
+      return fetch(base+'/issues/'+data.pr_number+'/comments',
+        { method:'POST', headers:postHeaders, body:JSON.stringify({ body:commentText(f) }) })
+        .then(asJson).then(function(res){ if(res.ok){ ok(false); } else { handleErr(res); } }).catch(netErr);
+    }
+
+    // No line -> can't be inline; post a general PR comment.
+    if(!f.line){ postIssueComment(); return; }
+
+    busy();
+    // Resolve the PR's CURRENT full head SHA (the report only stores a short one, and inline
+    // comments require the full 40-char commit_id anchored to the latest commit).
+    fetch(base+'/pulls/'+data.pr_number, { headers:authHeaders }).then(asJson).then(function(pr){
+      if(!pr.ok){ handleErr(pr); return; }
+      var sha = pr.j && pr.j.head && pr.j.head.sha;
+      if(!sha){ reset(); alert('Could not read the PR head commit from GitHub.'); return; }
+      return fetch(base+'/pulls/'+data.pr_number+'/comments', {
+        method:'POST', headers:postHeaders,
+        body: JSON.stringify({ body:commentText(f), commit_id:sha, path:f.file, line:parseInt(f.line,10), side:'RIGHT' })
+      }).then(asJson).then(function(res){
+        if(res.ok){ ok(true); return; }
+        if(res.status===422){
+          reset();
+          if(confirm('Could not attach to '+f.file+':'+f.line+' as an inline comment.\n\n'
+            + 'That line is likely not part of the PR diff (only added/changed lines can take inline '
+            + 'comments), or the PR has new commits since this report.\n\n'
+            + 'Post it as a general PR comment instead? (It still references the file and line.)')){
+            postIssueComment();
+          }
+          return;
+        }
+        handleErr(res);
+      });
+    }).catch(netErr);
+  }
+
+  app.addEventListener('click', function(ev){
+    var t = ev.target.closest('button, .sec-header');
+    if(!t) return;
+
+    if(t.hasAttribute('data-approve')){ approvePR(t); return; }
+    if(t.hasAttribute('data-toggle')){
+      var id=t.getAttribute('data-toggle');
+      document.getElementById(id).classList.toggle('cl');
+      document.getElementById('t_'+id).classList.toggle('cl');
+      return;
+    }
+    if(t.hasAttribute('data-comment')){
+      var fc=findingById(t.getAttribute('data-comment')); if(!fc) return;
+      postComment(fc, t);
+      return;
+    }
+    if(t.hasAttribute('data-copy')){
+      var f=findingById(t.getAttribute('data-copy')); if(!f) return;
+      var txt=commentText(f);
+      var done=function(){ t.textContent='✓ Copied'; t.classList.add('done'); toast('Comment copied — paste into the PR'); };
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(txt).then(done, function(){ fallbackCopy(txt); done(); });
+      } else { fallbackCopy(txt); done(); }
+      return;
+    }
+    if(t.hasAttribute('data-dismiss')){
+      var fid=t.getAttribute('data-dismiss');
+      var el=document.getElementById(fid);
+      if(el.classList.contains('dismissed')){
+        el.classList.remove('dismissed'); dismissed=dismissed.filter(function(x){return x!==fid;});
+        t.textContent='✕ Dismiss'; t.classList.remove('done');
+      } else {
+        el.classList.add('dismissed'); if(dismissed.indexOf(fid)<0) dismissed.push(fid);
+        t.textContent='Restore'; t.classList.add('done');
+      }
+      try{ localStorage.setItem(LS_KEY, JSON.stringify(dismissed)); }catch(e){}
+      return;
+    }
+  });
+
+  function fallbackCopy(txt){
+    var ta=document.createElement('textarea'); ta.value=txt;
+    ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+    ta.select(); try{ document.execCommand('copy'); }catch(e){} document.body.removeChild(ta);
+  }
+})();
+</script>
+</body>
+</html>

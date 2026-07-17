@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GW PR-Review — Stage 3 → Stage 4 (Presentation)</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+    --ink:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --accent2:#7ee787;
+    --parallel:#d2a8ff; --verify:#ffa657; --danger:#ff7b72; --serial:#79c0ff;
+    --skill:#ffa657;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
+
+  /* slide framework */
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+    padding:5vh 6vw 12vh;opacity:0;transition:opacity .25s ease}
+  .slide.active{display:flex;opacity:1}
+  .kicker{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  h1{font-size:min(6vw,52px);line-height:1.1;margin:0 0 14px}
+  h2{font-size:min(4.2vw,34px);margin:0 0 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .stagepill{font-size:13px;font-weight:800;letter-spacing:.5px;padding:4px 12px;border-radius:20px}
+  .s3{background:rgba(255,166,87,.15);color:var(--skill);border:1px solid rgba(255,166,87,.4)}
+  .s4{background:rgba(210,168,255,.15);color:var(--parallel);border:1px solid rgba(210,168,255,.4)}
+  p.lead{font-size:min(2.6vw,20px);color:var(--muted);max-width:60ch;margin:0 0 8px}
+
+  /* nav chrome */
+  .bar{position:fixed;bottom:0;left:0;right:0;height:64px;display:flex;align-items:center;
+    justify-content:space-between;padding:0 22px;background:linear-gradient(0deg,rgba(13,17,23,.96),transparent);z-index:20}
+  .dots{display:flex;gap:9px;align-items:center}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--border);border:0;cursor:pointer;padding:0}
+  .dot.on{background:var(--accent);transform:scale(1.25)}
+  .btns{display:flex;gap:8px}
+  .btns button,.count{background:var(--panel);color:var(--ink);border:1px solid var(--border);
+    border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+  .btns button:hover{border-color:var(--accent)}
+  .count{color:var(--muted);cursor:default}
+  .hint{position:fixed;top:14px;right:18px;font-size:11.5px;color:var(--muted);z-index:20}
+
+  /* flow diagram (node chain) */
+  .flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding:10px 2px 16px;scrollbar-width:thin}
+  .node{flex:0 0 auto;width:104px;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:9px 8px;text-align:center;position:relative}
+  .node .ic{font-size:19px;display:block;margin-bottom:5px}
+  .node .lbl{font-size:10.5px;line-height:1.25;color:var(--ink)}
+  .node.skill{border-color:rgba(255,166,87,.55);background:rgba(255,166,87,.07)}
+  .node.skill .ic{color:var(--skill)}
+  .node.decision{border-color:rgba(121,192,255,.5)}
+  .conn{flex:0 0 auto;width:20px;align-self:center;height:2px;background:var(--border);position:relative}
+  .conn::after{content:"";position:absolute;right:-1px;top:-3px;border-left:6px solid var(--border);
+    border-top:4px solid transparent;border-bottom:4px solid transparent}
+  .brace{margin:10px 0 0;font-size:13px;color:var(--skill)}
+  .brace b{color:var(--ink)}
+
+  /* numbered steps */
+  .steps{display:flex;flex-direction:column;gap:11px;max-width:74ch}
+  .stepline{display:flex;gap:14px;align-items:flex-start;background:var(--panel);border:1px solid var(--border);
+    border-left:4px solid var(--serial);border-radius:10px;padding:12px 15px}
+  .stepline.par{border-left-color:var(--parallel)} .stepline.ver{border-left-color:var(--verify)}
+  .stepline .n{flex:0 0 30px;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+    font-weight:700;background:var(--panel2);border:1px solid var(--border);font-size:14px}
+  .stepline .t{font-size:min(2.3vw,16.5px)} .stepline .t b{color:var(--ink)}
+  .stepline .t small{color:var(--muted);display:block;margin-top:2px;font-size:13px}
+  .newtag{font-size:10px;font-weight:800;color:#0d1117;background:var(--accent2);padding:1px 7px;border-radius:10px;margin-left:8px}
+
+  /* parallel fan box */
+  .fan{border:1px dashed rgba(210,168,255,.5);background:rgba(210,168,255,.05);border-radius:12px;padding:12px 14px;margin:2px 0}
+  .fan .cap{color:var(--parallel);font-weight:700;font-size:13px;margin-bottom:10px}
+  .cols{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .col{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:9px 8px;text-align:center}
+  .col b{font-size:12px} .col small{color:var(--muted);font-size:10.5px;display:block;margin-top:2px}
+  @media(max-width:760px){.cols{grid-template-columns:repeat(2,1fr)} .node{width:92px}}
+
+  /* compare table */
+  .cmp{width:100%;max-width:90ch;border-collapse:collapse;font-size:min(2.3vw,16px)}
+  .cmp th,.cmp td{border:1px solid var(--border);padding:11px 14px;text-align:left;vertical-align:top}
+  .cmp th{background:var(--panel2);font-size:14px}
+  .cmp th.c3{color:var(--skill)} .cmp th.c4{color:var(--parallel)}
+  .cmp td:first-child{color:var(--muted);width:26%}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:80ch}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+  .card.win{border-top:3px solid var(--accent2)}
+  .card h3{margin:0 0 8px;font-size:18px}
+  .card ul{margin:0;padding-left:18px;color:var(--muted)} .card li{margin:5px 0}
+  .center{align-items:center;text-align:center}
+  .big{font-size:min(3vw,22px);color:var(--muted);max-width:60ch}
+  .tiny{font-size:12px;color:var(--muted);margin-top:22px}
+</style>
+</head>
+<body>
+<div class="hint">← → to navigate · F fullscreen</div>
+<div class="deck" id="deck">
+
+  <!-- 1 TITLE -->
+  <section class="slide center">
+    <p class="kicker">GW PR-Review Automation</p>
+    <h1>From Stage&nbsp;3 to Stage&nbsp;4</h1>
+    <p class="big">How I upgraded my automated pull-request reviewer from a single linear pipeline into a parallel, self-verifying orchestrator — same job, faster and more accurate.</p>
+    <p class="tiny">A quick, step-by-step walkthrough</p>
+  </section>
+
+  <!-- 2 THE JOB -->
+  <section class="slide">
+    <p class="kicker">The job (unchanged)</p>
+    <h2>What the reviewer does</h2>
+    <p class="lead">Every weekday, six times a day, it automatically finds open PRs, reviews the code against our standards, and writes a report — <b>read-only</b>, nothing posted to GitHub without me.</p>
+    <div class="grid2" style="margin-top:14px">
+      <div class="card"><h3>🎯 Same goal in both stages</h3><ul>
+        <li>Find eligible open PRs</li><li>Review changed files vs the rulebook</li><li>Produce one HTML report per PR</li></ul></div>
+      <div class="card"><h3>🔄 What we're changing</h3><ul>
+        <li><b>Stage 3</b> — one long sequential pass</li><li><b>Stage 4</b> — parallel reviewers + a verify step</li><li>Only <b>how</b> the review runs changes</li></ul></div>
+    </div>
+  </section>
+
+  <!-- 3 STAGE 3 DIAGRAM -->
+  <section class="slide">
+    <h2><span class="stagepill s3">STAGE 3</span> The linear pipeline (today)</h2>
+    <p class="lead">One chain of steps runs start-to-finish. The six review “skills” run <b>one after another</b> for each PR.</p>
+    <div class="flow">
+      <div class="node"><span class="ic">🌐</span><span class="lbl">Fetch Open PRs</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Filter PRs (Junie &amp; Paul)</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">🔁</span><span class="lbl">Loop Each PR</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">🌐</span><span class="lbl">Fetch PR Reviews</span></div><div class="conn"></div>
+      <div class="node decision"><span class="ic">{ }</span><span class="lbl">Already Approved?</span></div><div class="conn"></div>
+      <div class="node decision"><span class="ic">⇄</span><span class="lbl">Skip or Review?</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">🌐</span><span class="lbl">Fetch PR Details</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">🌐</span><span class="lbl">Fetch PR Files</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Merge PR Data</span></div><div class="conn"></div>
+      <div class="node skill"><span class="ic">{ }</span><span class="lbl">Skill: Controller &amp; Security</span></div><div class="conn"></div>
+      <div class="node skill"><span class="ic">{ }</span><span class="lbl">Skill: Query &amp; Command</span></div><div class="conn"></div>
+      <div class="node skill"><span class="ic">{ }</span><span class="lbl">Skill: DTO &amp; Model</span></div><div class="conn"></div>
+      <div class="node skill"><span class="ic">{ }</span><span class="lbl">Skill: Code Quality</span></div><div class="conn"></div>
+      <div class="node skill"><span class="ic">{ }</span><span class="lbl">Skill: Test</span></div><div class="conn"></div>
+      <div class="node skill"><span class="ic">{ }</span><span class="lbl">Skill: Integration Test</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Approval Decision</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Generate HTML</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">💾</span><span class="lbl">Save to Disk</span></div>
+    </div>
+    <p class="brace">🟠 The six <b>Skill</b> steps are the actual code review — and they run strictly <b>in sequence</b>, one waiting for the last.</p>
+  </section>
+
+  <!-- 4 STAGE 3 STEPS -->
+  <section class="slide">
+    <h2><span class="stagepill s3">STAGE 3</span> In plain steps</h2>
+    <div class="steps">
+      <div class="stepline"><div class="n">1</div><div class="t"><b>Find &amp; filter PRs</b><small>Fetch open PRs → keep the two authors I review → skip drafts / already-approved / already-reviewed.</small></div></div>
+      <div class="stepline"><div class="n">2</div><div class="t"><b>For each PR, gather the change</b><small>Fetch PR details + files, read the changed code.</small></div></div>
+      <div class="stepline"><div class="n">3</div><div class="t"><b>Run the 6 review skills — one by one</b><small>Controller &amp; Security → Query &amp; Command → DTO &amp; Model → Code Quality → Test → Integration Test. Each waits for the previous.</small></div></div>
+      <div class="stepline"><div class="n">4</div><div class="t"><b>Decide &amp; report</b><small>Combine findings → approval decision → generate HTML → save to disk.</small></div></div>
+    </div>
+    <p class="lead" style="margin-top:18px">Simple and reliable — but slow, and whatever a skill flags goes straight into the report, even if it's a false alarm.</p>
+  </section>
+
+  <!-- 5 WHY CHANGE -->
+  <section class="slide center">
+    <p class="kicker">The problem to solve</p>
+    <h2>Why move to Stage 4?</h2>
+    <div class="grid2" style="margin-top:6px">
+      <div class="card"><h3>🐢 Sequential = slow</h3><ul><li>Six reviews run back-to-back</li><li>Total time = the sum of every step</li></ul></div>
+      <div class="card"><h3>⚠️ No second opinion</h3><ul><li>A wrong “error” ships as-is</li><li>I waste time double-checking false alarms</li></ul></div>
+    </div>
+    <p class="big" style="margin-top:20px">Goal: run the reviews <b>at the same time</b>, and <b>fact-check every error</b> before it reaches the report.</p>
+  </section>
+
+  <!-- 6 STAGE 4 DIAGRAM -->
+  <section class="slide">
+    <h2><span class="stagepill s4">STAGE 4</span> The orchestrated pipeline (new)</h2>
+    <p class="lead">Same start and end. The six sequential skills become <b>5 reviewers running in parallel</b>, plus a new <b>verify</b> step.</p>
+    <div class="flow">
+      <div class="node"><span class="ic">🌐</span><span class="lbl">Find &amp; Filter PRs</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">🔁</span><span class="lbl">Loop Each PR</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">🌐</span><span class="lbl">Gather Change (read-only)</span></div><div class="conn"></div>
+      <div class="node" style="width:150px;border-color:rgba(210,168,255,.6);background:rgba(210,168,255,.08)">
+        <span class="ic" style="color:var(--parallel)">⑃</span><span class="lbl"><b>5 Reviewers<br>IN PARALLEL</b><br>R1·R2·R3·R4·R5</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Merge &amp; Dedupe</span></div><div class="conn"></div>
+      <div class="node" style="border-color:rgba(255,166,87,.6);background:rgba(255,166,87,.08)"><span class="ic" style="color:var(--verify)">✓</span><span class="lbl"><b>Verify Every Error</b></span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Approval Decision</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">{ }</span><span class="lbl">Generate HTML</span></div><div class="conn"></div>
+      <div class="node"><span class="ic">💾</span><span class="lbl">Save to Disk</span></div>
+    </div>
+    <div class="fan" style="margin-top:8px">
+      <div class="cap">The 5 parallel reviewers (the old 6 skills, regrouped):</div>
+      <div class="cols">
+        <div class="col"><b>R1</b><small>Architecture &amp; CQRS</small></div>
+        <div class="col"><b>R2</b><small>API &amp; Security</small></div>
+        <div class="col"><b>R3</b><small>Contracts &amp; Data</small></div>
+        <div class="col"><b>R4</b><small>Code Quality / Runtime</small></div>
+        <div class="col"><b>R5</b><small>Test &amp; Integration</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 STAGE 4 STEPS -->
+  <section class="slide">
+    <h2><span class="stagepill s4">STAGE 4</span> In plain steps</h2>
+    <div class="steps">
+      <div class="stepline"><div class="n">1</div><div class="t"><b>Find &amp; filter PRs</b><small>Exactly the same as before.</small></div></div>
+      <div class="stepline"><div class="n">2</div><div class="t"><b>Orchestrator gathers the change</b><small>One controller reads all the code once (read-only) and hands it to the reviewers.</small></div></div>
+      <div class="stepline par"><div class="n">3</div><div class="t"><b>5 reviewers run at the same time</b> <span class="newtag">NEW</span><small>Each owns a slice of the rulebook (architecture, security, data, quality, testing) and returns its findings.</small></div></div>
+      <div class="stepline"><div class="n">4</div><div class="t"><b>Merge the findings</b><small>Combine all five, remove duplicates.</small></div></div>
+      <div class="stepline ver"><div class="n">5</div><div class="t"><b>Fact-check every error</b> <span class="newtag">NEW</span><small>A separate agent tries to <i>disprove</i> each error. False alarms are dropped before the report.</small></div></div>
+      <div class="stepline"><div class="n">6</div><div class="t"><b>Decide &amp; report</b><small>Recount → approval decision → generate HTML → save. Same output as Stage 3.</small></div></div>
+    </div>
+  </section>
+
+  <!-- 8 COMPARE -->
+  <section class="slide">
+    <h2>Stage 3 vs Stage 4 — side by side</h2>
+    <table class="cmp">
+      <tr><th></th><th class="c3">STAGE 3 (before)</th><th class="c4">STAGE 4 (after)</th></tr>
+      <tr><td>How reviews run</td><td>6 skills, one after another</td><td>5 reviewers, all at once</td></tr>
+      <tr><td>Speed</td><td>Sum of every step</td><td>As fast as the slowest reviewer</td></tr>
+      <tr><td>False positives</td><td>Ship as-is</td><td>Each error is disproven or dropped</td></tr>
+      <tr><td>Structure</td><td>One long chain</td><td>Orchestrator + focused sub-agents</td></tr>
+      <tr><td>Safety / output</td><td colspan="2" style="text-align:center;color:var(--accent2)">Identical — read-only, 1 PR = 1 HTML, same report</td></tr>
+    </table>
+    <p class="lead" style="margin-top:16px">Same inputs, same reports — a faster engine with a built-in fact-checker.</p>
+  </section>
+
+  <!-- 9 SUMMARY -->
+  <section class="slide center">
+    <p class="kicker">In one line</p>
+    <h1 style="font-size:min(5vw,44px)">Same review. Run in parallel. Every error fact-checked.</h1>
+    <div class="grid2" style="margin-top:14px">
+      <div class="card win"><h3>⚡ Faster</h3><ul><li>Reviews run concurrently, not in a queue</li></ul></div>
+      <div class="card win"><h3>🎯 More accurate</h3><ul><li>Adversarial verify removes false alarms</li></ul></div>
+    </div>
+    <p class="tiny">Full technical flow: <b>how-gw-prreview-stage4-works.html</b></p>
+  </section>
+
+</div>
+
+<div class="bar">
+  <div class="dots" id="dots"></div>
+  <div class="btns">
+    <button id="prev">‹ Prev</button>
+    <span class="count" id="count">1 / 9</span>
+    <button id="next">Next ›</button>
+  </div>
+</div>
+
+<script>
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var i = 0, dotsEl = document.getElementById('dots'), countEl = document.getElementById('count');
+  slides.forEach(function(_, idx){
+    var b = document.createElement('button'); b.className='dot'; b.setAttribute('aria-label','Slide '+(idx+1));
+    b.onclick=function(){go(idx)}; dotsEl.appendChild(b);
+  });
+  var dots = Array.prototype.slice.call(dotsEl.children);
+  function go(n){
+    i = Math.max(0, Math.min(slides.length-1, n));
+    slides.forEach(function(s,idx){ s.classList.toggle('active', idx===i); });
+    dots.forEach(function(d,idx){ d.classList.toggle('on', idx===i); });
+    countEl.textContent = (i+1)+' / '+slides.length;
+  }
+  document.getElementById('prev').onclick=function(){go(i-1)};
+  document.getElementById('next').onclick=function(){go(i+1)};
+  document.addEventListener('keydown', function(e){
+    if(e.key==='ArrowRight'||e.key==='PageDown'||e.key===' '){go(i+1); e.preventDefault();}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){go(i-1); e.preventDefault();}
+    else if(e.key==='Home'){go(0);} else if(e.key==='End'){go(slides.length-1);}
+    else if(e.key==='f'||e.key==='F'){ if(!document.fullscreenElement){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();} else {document.exitFullscreen&&document.exitFullscreen();} }
+  });
+  go(0);
+</script>
+</body>
+</html>

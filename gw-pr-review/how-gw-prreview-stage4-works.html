@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GW PR-Review — Stage 4 Orchestration Flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+    --ink:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --accent2:#7ee787;
+    --parallel:#d2a8ff; --verify:#ffa657; --danger:#ff7b72; --serial:#79c0ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    padding:32px 20px 64px}
+  .wrap{max-width:960px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 22px}
+  .badge{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.4px;
+    padding:2px 8px;border-radius:20px;vertical-align:middle}
+  .b-s4{background:rgba(210,168,255,.15);color:var(--parallel);border:1px solid rgba(210,168,255,.35)}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 26px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .d-serial{background:var(--serial)} .d-parallel{background:var(--parallel)}
+  .d-verify{background:var(--verify)} .d-new{background:var(--accent2)}
+
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:14px 16px;position:relative}
+  .step.serial{border-left:4px solid var(--serial)}
+  .step.parallel{border-left:4px solid var(--parallel)}
+  .step.verify{border-left:4px solid var(--verify)}
+  .step h3{margin:0 0 4px;font-size:15.5px;display:flex;align-items:center;gap:9px}
+  .num{flex:0 0 26px;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+    font-size:13px;font-weight:700;background:var(--panel2);border:1px solid var(--border)}
+  .step p{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+  .tag{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:12px;margin-left:auto}
+  .t-serial{background:rgba(121,192,255,.14);color:var(--serial)}
+  .t-parallel{background:rgba(210,168,255,.14);color:var(--parallel)}
+  .t-verify{background:rgba(255,166,87,.14);color:var(--verify)}
+  .new{font-size:10px;font-weight:700;color:#0d1117;background:var(--accent2);
+    padding:1px 6px;border-radius:10px;margin-left:8px}
+  code{background:var(--panel2);border:1px solid var(--border);border-radius:5px;
+    padding:1px 6px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;color:#c9d1d9}
+
+  .arrow{height:26px;position:relative}
+  .arrow::before{content:"";position:absolute;left:50%;top:0;width:2px;height:100%;
+    background:var(--border);transform:translateX(-50%)}
+  .arrow::after{content:"";position:absolute;left:50%;bottom:-1px;width:9px;height:9px;
+    border-right:2px solid var(--border);border-bottom:2px solid var(--border);
+    transform:translateX(-50%) rotate(45deg)}
+  .loop{text-align:center;color:var(--muted);font-size:11.5px;margin:2px 0}
+
+  /* parallel fan-out */
+  .fan{background:rgba(210,168,255,.05);border:1px dashed rgba(210,168,255,.4);
+    border-radius:12px;padding:14px}
+  .fan-title{font-size:12.5px;color:var(--parallel);font-weight:600;margin:0 0 12px;
+    display:flex;align-items:center;gap:8px}
+  .cols{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .col{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:10px 9px}
+  .col b{display:block;font-size:12px;margin-bottom:3px;color:var(--ink)}
+  .col small{color:var(--muted);font-size:10.8px;line-height:1.4;display:block}
+  @media(max-width:760px){.cols{grid-template-columns:repeat(2,1fr)}}
+
+  .frame{border:1px solid var(--border);border-radius:14px;padding:16px;margin:10px 0;
+    background:linear-gradient(180deg,rgba(88,166,255,.04),transparent)}
+  .frame>.flabel{font-size:11.5px;letter-spacing:.5px;color:var(--accent);font-weight:700;
+    text-transform:uppercase;margin:-4px 0 12px}
+  .stack{display:flex;flex-direction:column}
+  .foot{margin-top:30px;padding-top:16px;border-top:1px solid var(--border);
+    color:var(--muted);font-size:12px}
+  .files{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  @media(max-width:760px){.files{grid-template-columns:1fr}}
+  .files div{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:12.5px}
+  .files b{color:var(--accent2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GW PR-Review — Orchestration Flow <span class="badge b-s4">STAGE 4</span></h1>
+  <p class="sub">One headless Claude process acts as an <b>orchestrator</b>: it gathers each PR read-only, fans out five reviewers in parallel, adversarially verifies every error, then merges and renders. Runs unattended 6×/day (Mon–Fri).</p>
+
+  <div class="legend">
+    <span><i class="dot d-serial"></i> Serial (orchestrator only)</span>
+    <span><i class="dot d-parallel"></i> Parallel sub-agents</span>
+    <span><i class="dot d-verify"></i> Adversarial verify</span>
+    <span><i class="dot d-new"></i> New vs Stage 3</span>
+  </div>
+
+  <div class="stack">
+
+    <div class="step serial">
+      <h3><span class="num">⏰</span> Scheduled trigger <span class="tag t-serial">wrapper</span></h3>
+      <p><code>GW-PRReview</code> fires at 08/10/12/14/16/18. <code>run-pr-review.ps1</code> checks <code>gh</code> auth, does a read-only <code>git fetch</code>, takes the <code>.pr-review.lock</code>, and skips launching Claude entirely if every eligible PR already has a report.</p>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="frame">
+      <div class="flabel">Headless Claude = Orchestrator &nbsp;(<code>claude --print --dangerously-skip-permissions</code>)</div>
+      <div class="stack">
+
+        <div class="step serial">
+          <h3><span class="num">1</span> Discover &amp; filter PRs <span class="tag t-serial">serial</span></h3>
+          <p><code>gh pr list</code> → keep non-draft PRs by the two reviewed authors, updated ≤7 days, not already approved by you, with no existing <code>PR-&lt;n&gt;-*.html</code> (idempotent “1 PR = 1 HTML”). Emits <code>PRs to review: […]</code>.</p>
+        </div>
+
+        <div class="arrow"></div>
+        <div class="loop">▼ &nbsp; for each PR, one at a time &nbsp; ▼</div>
+
+        <div class="step serial">
+          <h3><span class="num">2</span> Gather the change <span class="tag t-serial">serial · read-only git/gh</span></h3>
+          <p>The orchestrator is the <b>only</b> actor that touches git/<code>gh</code>. It fetches <code>refs/pr-review/&lt;n&gt;</code>, reads each whole changed <code>.cs</code> file at head (+ base for context), caches the text, then <b>deletes the temp ref immediately</b>. Sub-agents get this text inline — they fetch nothing.</p>
+        </div>
+
+        <div class="arrow"></div>
+
+        <div class="fan">
+          <p class="fan-title">⑃ Phase 2 — fan out 5 dimension reviewers IN PARALLEL <span class="new">NEW</span></p>
+          <div class="cols">
+            <div class="col"><b>R1</b><small>Architecture &amp; CQRS<br>§1,3,4</small></div>
+            <div class="col"><b>R2</b><small>API &amp; Security<br>§2,10,7</small></div>
+            <div class="col"><b>R3</b><small>Contracts &amp; Data<br>§5,6,12</small></div>
+            <div class="col"><b>R4</b><small>Runtime (cross-cut)<br>§8,9,11,14</small></div>
+            <div class="col"><b>R5</b><small>Testing<br>§13</small></div>
+          </div>
+          <p style="margin:11px 0 0;color:var(--muted);font-size:12px">Each is a no-tool sub-agent given the PR metadata, its files’ full text, its rubric sections, and the finding shape. Each returns a JSON array of findings.</p>
+        </div>
+
+        <div class="arrow"></div>
+
+        <div class="step serial">
+          <h3><span class="num">3</span> Merge &amp; dedupe <span class="tag t-serial">serial</span></h3>
+          <p>Concatenate the five arrays; dedupe on <code>(file, line, category)</code> keeping highest severity + richest record; normalize categories so the report groups cleanly.</p>
+        </div>
+
+        <div class="arrow"></div>
+
+        <div class="step verify">
+          <h3><span class="num">4</span> Adversarially verify every error <span class="new">NEW</span><span class="tag t-verify">parallel</span></h3>
+          <p>Each <code>error</code> finding goes to a verify sub-agent that tries to <b>disprove</b> it against the quoted rule + file slice → <code>UPHELD</code> / <code>REJECTED</code> / <code>WRONG_SEVERITY</code>. Uphold on uncertainty. This kills false-positive errors before they reach the report.</p>
+        </div>
+
+        <div class="arrow"></div>
+
+        <div class="step serial">
+          <h3><span class="num">5</span> Finalize, score &amp; render <span class="tag t-serial">serial</span></h3>
+          <p>Drop rejected, downgrade wrong-severity, then <b>recompute</b> E/W/I (single source of truth). Apply the verdict ladder, inject the data JSON into <code>pr-review-template.html</code>, and write <code>PR-&lt;n&gt;-&lt;slug&gt;.html</code>. Emits <code>PR #&lt;n&gt; REVIEWED: …</code>.</p>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="step serial">
+      <h3><span class="num">✓</span> Read-only guarantee &amp; summary <span class="tag t-serial">wrapper</span></h3>
+      <p>Asserts branch + HEAD are byte-for-byte unchanged, cleans any stray <code>refs/pr-review/*</code>, releases the lock, and logs <code>PR REVIEW RUN COMPLETE</code>. You open the HTML reports and act on GitHub manually — nothing is posted automatically.</p>
+    </div>
+
+  </div>
+
+  <div class="frame" style="margin-top:26px">
+    <div class="flabel">What changed vs Stage 3</div>
+    <div class="files">
+      <div><b>Stage 3</b> — one Claude pass reads all files and applies all 14 rubric sections monolithically, sequentially.</div>
+      <div><b>Stage 4</b> — orchestrator delegates to 5 parallel reviewers, then verifies errors adversarially, then integrates.</div>
+      <div><b>False positives</b> — Stage 3 ships whatever the pass emits; Stage 4 disproves each error before it lands.</div>
+      <div><b>Contention</b> — orchestrator owns all git/gh serially; sub-agents use no tools, so the shared repo is never touched in parallel.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    Still strictly read-only · idempotent (1 PR = 1 HTML) · unattended within the 1-hour task limit.
+    Files: <code>pr-review-prompt.md</code> (orchestrator), <code>run-pr-review.ps1</code> (wrapper), <code>pr-review-standards.md</code> (rulebook), <code>pr-review-template.html</code> (report shell).
+  </div>
+</div>
+</body>
+</html>

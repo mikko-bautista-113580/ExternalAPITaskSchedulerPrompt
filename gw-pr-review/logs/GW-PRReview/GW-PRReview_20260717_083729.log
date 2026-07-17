@@ -1,0 +1,13 @@
+[2026-07-17T08:37:29+08:00] === pr-review run started (task=GW-PRReview, model=opus) ===
+[2026-07-17T08:37:29+08:00] Repo:   c:\neldevsrc\Github\sis-externalapi
+[2026-07-17T08:37:29+08:00] Output: C:\Users\lbautist\Downloads\PR Review
+[2026-07-17T08:37:29+08:00] Log:    C:\neldevsrc\Github\TaskScheduler\gw-pr-review\logs\GW-PRReview\GW-PRReview_20260717_083729.log
+[2026-07-17T08:37:29+08:00] Tail this log live:  Get-Content -Wait -Path "C:\neldevsrc\Github\TaskScheduler\gw-pr-review\logs\GW-PRReview\GW-PRReview_20260717_083729.log"
+[2026-07-17T08:37:30+08:00] gh auth status:
+github.com
+  Γ£ô Logged in to github.com account mikko-bautista-113580 (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token: gho_************************************
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+[2026-07-17T08:37:30+08:00] ABORT: another pr-review run is in progress (lock age 7.7 min). Exiting.

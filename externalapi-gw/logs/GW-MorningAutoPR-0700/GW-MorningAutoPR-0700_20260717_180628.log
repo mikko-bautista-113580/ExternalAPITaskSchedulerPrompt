@@ -1,0 +1,10 @@
+[2026-07-17T18:06:28+08:00] === morning-gw run started (task=GW-MorningAutoPR-0700) ===
+[2026-07-17T18:06:28+08:00] Repo: c:\neldevsrc\Github\sis-externalapi
+[2026-07-17T18:06:28+08:00] Log:  C:\neldevsrc\Github\TaskScheduler\externalapi-gw\logs\GW-MorningAutoPR-0700\GW-MorningAutoPR-0700_20260717_180628.log
+[2026-07-17T18:06:28+08:00] Tail this log live:  Get-Content -Wait -Path "C:\neldevsrc\Github\TaskScheduler\externalapi-gw\logs\GW-MorningAutoPR-0700\GW-MorningAutoPR-0700_20260717_180628.log"
+[2026-07-17T18:06:28+08:00] Resolving current sprint for team 'Modernization Team' (renweb/ColdFusion)...
+[2026-07-17T18:06:28+08:00] Current sprint: '26.15'  (iteration path: ColdFusion\2026\26.15)
+[2026-07-17T18:06:28+08:00] Querying Active 'ExternalAPIGW' tickets assigned to you in the sprint...
+[2026-07-17T18:06:29+08:00] No Active 'ExternalAPIGW' tickets assigned to you in sprint '26.15' -- nothing to do this run.
+[2026-07-17T18:06:29+08:00] Exiting cleanly WITHOUT switching branches or modifying the working tree.
+[2026-07-17T18:06:29+08:00] Lock released.
