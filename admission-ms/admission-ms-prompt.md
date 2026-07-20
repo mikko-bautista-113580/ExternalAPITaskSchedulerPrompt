@@ -177,6 +177,19 @@ dotnet test src/Services.Admissions/... --filter "FullyQualifiedName~<Feature>"
 
 Expect the first API-test run to emit `*.received.txt` and fail; approve those to `*.verified.txt`, then re-run until both the unit and API tiers pass. Do not declare success while a feature has only unit tests.
 
+#### ⚠️ Coverage gate — 100% line AND 100% branch REQUIRED (a feature is NOT `full` below 100%)
+Every non-excluded line of the code you generate for a feature must be exercised, and every branch (both sides of each `if`/ternary/null-check/`??`/switch arm) must be hit. The bar is **100% line coverage AND 100% branch coverage** on the production code each slice adds — measured only over the classes you generated for that feature, not the whole solution.
+
+- **What's measured:** the query/command **`Handler`**, the `Validator`, the DTO `Projection` expression, and any EF wiring you touched that is *not* marked `[ExcludeFromCodeCoverage]`. Controllers and DTOs already carry `[ExcludeFromCodeCoverage]` (see Step 3) and are correctly excluded — do not remove those attributes to game the number, and do not add the attribute to a `Handler`/`Validator` to dodge coverage.
+- **How to measure** (coverlet ships with the test projects). Collect coverage while running the feature's tests and read the per-class line/branch numbers:
+  ```
+  dotnet test src/Services.Admissions/... --filter "FullyQualifiedName~<Feature>" \
+    /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Include="[Admissions.Service]*<Feature>*"
+  ```
+  (If the repo already wires `coverlet.runsettings` or `--collect:"XPlat Code Coverage"`, use that path instead — discover it before inventing flags. Inspect the emitted `coverage.cobertura.xml` for `line-rate` **and** `branch-rate` on each generated class; both must be `1` / 100%.)
+- **How to reach 100%:** the canonical 15 GET scenarios (or the reduced set when `ConfigSchoolId` is omitted) plus the command validator tests are designed to cover the standard shape — if a line or branch is still uncovered, it means a real branch has no test. **Add the missing scenario** (e.g. the null-safe nav fallback in the `Projection`, an empty-result path, each validator rule's pass/fail). Do NOT paper over a gap by deleting code, over-excluding with `[ExcludeFromCodeCoverage]`, or writing an assertion-free test that merely executes a line — the added test must assert meaningful behavior.
+- **If 100% is genuinely unreachable** for a specific branch (e.g. a defensive guard that no seedable input can trigger), do not silently fall short: leave a `// TODO(AB#<id>): <branch> uncovered — <why>` at that spot, report the exact class + line + achieved percentages in the final summary, and mark the story `scaffold` (not `full`). A slice below 100% coverage without a logged, justified exception is a run defect.
+
 Emit the exact marker `BUILD: SUCCESS` or `BUILD: FAIL` (the wrapper greps for it). If the build cannot be made green after reasonable effort, keep the branch, leave a clear `// TODO(AB#<id>)` at the unresolved spot, log the errors, and emit `BUILD: FAIL` — do not delete work.
 
 ## Step 5 — Leave the changes UNCOMMITTED for the user to review
@@ -190,7 +203,7 @@ If a story lacks enough detail to implement a correct endpoint (unknown entity/t
 ## Exit behavior
 
 1. Ensure you are still on the `story/...` branch and your generated files are present as **uncommitted** changes (`git status --short`). Do not switch branches — the wrapper leaves the repo here for the user.
-2. Emit one marker per story: `STORY <id> GENERATED: <Feature> — <full|scaffold> — <files count> files`. **`full` REQUIRES both test tiers** (unit under `Admissions.Tests/Features/` AND the API tier under `Admissions.Tests/ApiTests/Features/` with approved `*.verified.txt`). A slice with unit tests only is NOT `full` — mark it `scaffold` and list the missing API-tier files in the summary. Include an approximate file count comparable to the reference PR (a GET feature is ~25+ files with the API tier + snapshots, not ~4).
+2. Emit one marker per story: `STORY <id> GENERATED: <Feature> — <full|scaffold> — <files count> files`. **`full` REQUIRES both test tiers AND 100% line + branch coverage** (unit under `Admissions.Tests/Features/` AND the API tier under `Admissions.Tests/ApiTests/Features/` with approved `*.verified.txt`, plus the coverage gate in Step 4 met at 100% line and 100% branch on the feature's non-`[ExcludeFromCodeCoverage]` classes). A slice with unit tests only, or one below 100% coverage without a logged justified exception, is NOT `full` — mark it `scaffold` and list the missing API-tier files and/or uncovered lines/branches in the summary. Log the achieved line% and branch% per feature. Include an approximate file count comparable to the reference PR (a GET feature is ~25+ files with the API tier + snapshots, not ~4).
 3. Emit the build marker exactly once: `BUILD: SUCCESS` or `BUILD: FAIL`.
 4. Print a final summary in this format, then exit 0:
 

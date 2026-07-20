@@ -147,6 +147,10 @@ For each ticket `{id}` with title `{title}`:
 
     After the codegen steps are complete:
     - Build the solution to verify there are no compile errors: `dotnet build src/Applications.SISApi/Applications.SISApi.sln` from the repo root. If errors, fix them and rebuild; loop up to 5 times before giving up and recording the ticket as `FAILED (build)`. Leave the fixes uncommitted in the working tree like everything else.
+    - **Coverage gate — 100% line AND 100% branch REQUIRED.** After the build is green, run the generated tests with coverage and confirm the code you generated for this ticket hits **100% line coverage AND 100% branch coverage** (both sides of every `if`/ternary/null-check/`??`/switch arm exercised) — measured only over the classes this ticket adds (the `Query` handler, the `Output`/`Input`/nested DTOs and their mapping, any `Reference` classes, and any non-`[ExcludeFromCodeCoverage]` wiring), not the whole solution. The Controller carries `[ExcludeFromCodeCoverage]` per `generate-get-endpoint.md` and is correctly excluded — do NOT strip that attribute to game the number, and do NOT add `[ExcludeFromCodeCoverage]` to a handler/DTO-mapper to dodge coverage.
+      1. Measure with coverlet: `dotnet test src/Applications.SISApi/Applications.SISApi.sln --filter "FullyQualifiedName~{FeatureName}" /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Include="[SISApi.API]*{FeatureName}*"`. If the repo already wires a `coverlet.runsettings` or `--collect:"XPlat Code Coverage"` path, discover and use that instead of inventing flags. Read `line-rate` **and** `branch-rate` for each generated class from the emitted `coverage.cobertura.xml`; both must be `1` (100%).
+      2. If any line or branch is uncovered, it means a scenario from the step-9c enumeration (or the `generate-get-endpoint.md` default suites) is missing — **add the test** (empty/404 path, each validation branch, each nullable-field branch of the Output mapping) and re-run until both rates are 100%. The added test must assert real behavior, not merely execute the line.
+      3. If a specific branch is genuinely unreachable (a defensive guard no valid input can hit), do not silently fall short: leave a `// TODO(AB#{id}): <branch> uncovered — <why>`, and record the class + line + achieved line%/branch% in the ticket summary. A ticket below 100% coverage without a logged, justified exception is `FAILED (coverage: <class> line=<x>% branch=<y>%)`.
     - Do **NOT** `git add`, `git stage`, or `git commit` anything. Per the Hard Prohibitions, every generated file must remain visible to the user as untracked or modified in the working tree on `story/{id}`.
     - **Print a clean file-change summary to the log** so the user knows exactly what to review. Format:
 
@@ -166,7 +170,7 @@ For each ticket `{id}` with title `{title}`:
         Generate the list by running `git status --porcelain` and **excluding the user's pre-existing WIP** (the snapshot you recorded in pre-flight step 4). The user's WIP entries are theirs, not yours — do not include them in the summary.
     - **Sanity check (do not skip):** run `git status --porcelain`, subtract the pre-existing WIP, and confirm the remaining entries match what `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` says you should have produced. If any expected file is missing, OR any unexpected file is present, log `FAILED (file-set mismatch: <details>)`. Do NOT try to "clean up" by deleting files — the user will resolve it manually.
 
-11. **STOP HERE.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on `story/{id}` with all generated files visible in the working tree. Log: `READY (uncommitted): branch story/{id} created off origin/main; {N} files added, {M} files modified — awaiting user review`.
+11. **STOP HERE.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on `story/{id}` with all generated files visible in the working tree. Log: `READY (uncommitted): branch story/{id} created off origin/main; {N} files added, {M} files modified; coverage line={x}% branch={y}% — awaiting user review`.
 
 12. **Single-ticket policy reminder:** after processing the chosen ticket, **do NOT loop to the next ticket** (per the single-ticket-per-run policy at the top of this prompt). Move to the Exit Behavior section.
 
@@ -187,6 +191,7 @@ Result:
   - {chosen-id}: SKIPPED (branch story/{id} already exists locally)
   - {chosen-id}: FAILED (ticket parse: <reason>)
   - {chosen-id}: FAILED (build)
+  - {chosen-id}: FAILED (coverage: <class> line=<x>% branch=<y>%)
   - {chosen-id}: FAILED (file-set mismatch: <details>)
   - {chosen-id}: FAILED ({short reason})
 
