@@ -151,6 +151,32 @@ For each ticket `{id}` with title `{title}`:
       1. Measure with coverlet: `dotnet test src/Applications.SISApi/Applications.SISApi.sln --filter "FullyQualifiedName~{FeatureName}" /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Include="[SISApi.API]*{FeatureName}*"`. If the repo already wires a `coverlet.runsettings` or `--collect:"XPlat Code Coverage"` path, discover and use that instead of inventing flags. Read `line-rate` **and** `branch-rate` for each generated class from the emitted `coverage.cobertura.xml`; both must be `1` (100%).
       2. If any line or branch is uncovered, it means a scenario from the step-9c enumeration (or the `generate-get-endpoint.md` default suites) is missing — **add the test** (empty/404 path, each validation branch, each nullable-field branch of the Output mapping) and re-run until both rates are 100%. The added test must assert real behavior, not merely execute the line.
       3. If a specific branch is genuinely unreachable (a defensive guard no valid input can hit), do not silently fall short: leave a `// TODO(AB#{id}): <branch> uncovered — <why>`, and record the class + line + achieved line%/branch% in the ticket summary. A ticket below 100% coverage without a logged, justified exception is `FAILED (coverage: <class> line=<x>% branch=<y>%)`.
+      4. **KNOWN BRANCH-COVERAGE TRAP — the `GetApimNextUrl` null-conditional chain + NSubstitute auto-mock (this is the #1 reason a GET handler lands at ~87% branch, not 100%).** Every list/paged GET Query handler contains two null-conditional chains inside the `ApimHelper.GetApimNextUrl(...)` call:
+
+         ```csharp
+         _httpContextAccessor?.HttpContext?.Request?.GetDisplayUrl(),
+         _httpContextAccessor?.HttpContext?.Request?.Query["api-version"]
+         ```
+
+         Each `?.` is a branch point (null → short-circuit vs. not-null → continue), so each chain has **three** branch points: the accessor, `HttpContext`, and `Request`. The trap: **NSubstitute auto-mocks abstract/interface return types.** `Substitute.For<IHttpContextAccessor>().HttpContext` returns a non-null substitute `HttpContext` by default, whose `.Request` is likewise a non-null substitute — *without you configuring anything*. So every "happy path" test silently exercises only the **not-null** side of all three `?.`, and the three null-short-circuit branches stay uncovered. A handler with otherwise-perfect tests will sit at branch-rate `0.875` (7/8) purely because of the `HttpContext == null` branch nobody hit.
+
+         To close it, add **three dedicated tests**, one nulling each level of the chain (in addition to a full-chain-non-null test that sets up a real `HttpContext`/`Request`/`QueryCollection`, plus the null-and-non-null `NextPage` tests that cover the `string.IsNullOrEmpty(nextPageUrl) ? null : nextPageUrl` ternary):
+         - **Accessor null** — construct the handler with `null` for the `IHttpContextAccessor` argument, then `Handle(...)`.
+         - **`HttpContext` null** — `_mockHttpContextAccessor.HttpContext.Returns((HttpContext)null);` (accessor present, its context null — this is the branch the auto-mock hides).
+         - **`Request` null** — a substitute `HttpContext` whose `mockHttpContext.Request.Returns((HttpRequest)null);`, wired via `_mockHttpContextAccessor.HttpContext.Returns(mockHttpContext);`.
+
+         Each asserts `result.NextPage Is.Null` (the chain yields a null display-url, so `GetApimNextUrl` returns empty → `NextPage` null). That takes the handler to 100% branch.
+
+      5. **Pinpointing WHICH branch is unhit (do this instead of guessing when branch-rate < 1).** cobertura's per-line `condition-coverage` is aggregated and hard to map to a specific `?.`. Re-run with coverlet's **json** format and read the `Branches` array directly — each entry has `Line`, `Offset`, `Path`, `Hits`; the `Path` whose `Hits == 0` is the uncovered edge, and offsets in ascending order map to the `?.` points left-to-right:
+
+         ```
+         dotnet test --filter "FullyQualifiedName~{FeatureName}" \
+           -p:CollectCoverage=true -p:CoverletOutputFormat=json \
+           -p:CoverletOutput=./TestResults/j/cov.json \
+           -p:Include="[SISApi.API]*{FeatureName}*"
+         ```
+
+         Then read `cov.json` → `<module> → <file> → <class> → <method>.Branches[]`. An entry like `Offset 298, Path 0, Hits 0` on the `GetApimNextUrl` line is the middle `?.` (the `HttpContext == null` short-circuit) never taken — fix it with the "`HttpContext` null" test above and re-measure.
     - Do **NOT** `git add`, `git stage`, or `git commit` anything. Per the Hard Prohibitions, every generated file must remain visible to the user as untracked or modified in the working tree on `story/{id}`.
     - **Print a clean file-change summary to the log** so the user knows exactly what to review. Format:
 
