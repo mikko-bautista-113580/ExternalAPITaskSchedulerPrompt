@@ -101,6 +101,32 @@ git update-ref -d refs/pr-review/<n>
 
 The sub-agents cannot fetch anything, so everything they need must come from this cached text.
 
+#### Phase 1b — Resolve & decompile the upstream client DTO(s) (orchestrator only; read-only)
+
+A Gateway GET endpoint is a thin wrapper over a domain microservice's **client library** (`{Domain}.Service.Client`), and the endpoint's `Output` is only correct if every property it advertises can actually be mapped from the upstream `{Resource}Dto`. The reviewers otherwise cannot tell a real field from an over-advertised one (e.g. an `Output` that inherits a `StudentReference` from its `Input` but the upstream DTO has no such field, so consumers will never receive it). So before fanning out, pull the real upstream contract and cache its text.
+
+1. **Identify the referenced client types.** From the PR's Query handler + `Output`/`Input` files you already cached, note the `{Domain}.Service.Client` namespace and the concrete types the generated code touches: the `I{Resource}Client`, the `{Resource}Dto` (and any nested DTO types it exposes), and the `Get{Resource}V1HttpResponseAsync` return type.
+2. **Resolve the package version** from the csproj at PR head (read it even if it isn't in the diff):
+   ```
+   git show refs/pr-review/<n>:src/Applications.SISApi/SISApi.API/SISApi.API.csproj
+   ```
+   Find `<PackageReference Include="SIS.{Domain}.Service.Client" Version="X.Y.Z" />`. Use that exact version (the PR may have bumped it — always take the PR-head value, not `origin/main`).
+3. **Locate the restored assembly** in the NuGet cache:
+   ```
+   ~/.nuget/packages/sis.{domain}.service.client/{X.Y.Z}/lib/net8.0/{Domain}.Service.Client.dll
+   ```
+   (lower-case package folder; the sibling `{Domain}.Service.Client.xml` doc file sits next to it.)
+4. **Decompile the referenced types.** Prefer `ilspycmd`; provision it best-effort if absent:
+   ```
+   ilspycmd --version 2>$null; if ($LASTEXITCODE -ne 0) { dotnet tool install --global ilspycmd 2>&1 | Out-Null }
+   ilspycmd "<dll path>" -t {Domain}.Service.Client.{Resource}Dto
+   ```
+   Run `-t` once per DTO type you need (the `{Resource}Dto` plus any nested DTO types it references). Capture the decompiled class text (property names, types, nullability, `[JsonProperty]` names).
+5. **Fallback when `ilspycmd` cannot be installed** (offline / locked-down scheduled env — `dotnet tool install` fails): read the sibling **`{Domain}.Service.Client.xml`** doc file (always present, no tool needed) and extract the `<member name="P:...">` summaries for the DTO. Log `WARN: ilspycmd unavailable — upstream DTO fidelity reduced to XML-doc summaries (names/descriptions only, no types/nullability)` so the user knows the mapping check was partial.
+6. **If neither is available** (DLL not restored AND no xml doc — e.g. the package was never restored locally): log `WARN: upstream {Domain}.Service.Client {version} not found in NuGet cache — R3 Output↔DTO mapping check skipped` and proceed without it. Do NOT fail the PR on this alone.
+
+Cache the decompiled/parsed DTO text in memory — you will inline it into **R3**'s brief in Phase 2. Note the fidelity level (full decompile vs xml-doc-only vs skipped) so R3 calibrates its confidence.
+
 ### Phase 2 — Fan out five dimension reviewers IN PARALLEL
 
 In a **single message, make five `Agent` tool calls at once** (`subagent_type: general-purpose`) so the reviewers run concurrently. Each reviewer owns a cluster of `pr-review-standards.md` sections and only the files it needs:
@@ -109,7 +135,7 @@ In a **single message, make five `Agent` tool calls at once** (`subagent_type: g
 |---|---|---|---|
 | **R1 — Architecture & CQRS** | 1 Architecture/CQRS, 3 Query Handler, 4 Command Handler | the feature slice: `*Query.cs`, `*Command.cs`, `*Handler` | `Architecture`, `CQRS` |
 | **R2 — API Surface & Security** | 2 Controller, 10 Authorization/Security, 7 Naming + versioning | `*Controller.cs` | `Controller`, `Security`, `Versioning` |
-| **R3 — Contracts & Data** | 5 Validation, 6 Model/DTO (+HATEOAS), 12 JSON Serialization | DTOs, `*Output.cs`, validators | `Validation`, `DTO & Model` |
+| **R3 — Contracts & Data** | 5 Validation, 6 Model/DTO (+HATEOAS), 12 JSON Serialization | DTOs, `*Output.cs`, validators, **+ the decompiled upstream `{Resource}Dto` from Phase 1b** | `Validation`, `DTO & Model` |
 | **R4 — Runtime Correctness (cross-cutting)** | 8 DI, 9 Error Handling, 11 Async, 14 General Quality, **15 Public Change Log** | **all** changed `.cs` files **+ `SISApi.API/Assets/PublicChangeLog.md` if changed** | `Error Handling`, `Async`, `Standards`, `Code Quality`, `Documentation` |
 | **R5 — Testing** | 13 Testing + Integration Test Standards | `*Tests*.cs`, `SISApi.APITests/**` | `Testing`, `Integration Test` |
 
@@ -122,7 +148,7 @@ For a PR that adds/changes a **GET endpoint**, also give **R2** the "Endpoint Va
 4. The finding-object shape, severity mapping, false-positive guards, and category list below.
 5. The instruction: *"Return ONLY a JSON array of finding objects (no prose, no tool calls). Prefer fewer, high-confidence findings with concrete `file:line`. If nothing, return `[]`."*
 
-The concrete rubric checks a careful reviewer looks for (distribute to the owning reviewer): feature-based placement + MediatR delegation + `sealed` query/command with nested `Handler` (R1); controller inherits `ExternalApiController`, `[Authorize(AuthenticationSchemes="ApiAuthentication")]` + `[Authorize(Roles="{Domain}Read")]`, `[ApiVersion]`/`[MapToApiVersion]`, `[ProducesResponseType]`, `CancellationToken` on actions, write verbs carry `{Domain}Write` (R2); `QuerySanitizer.Sanitize()`, `AddSchoolCodeFilterAsync`/`AddConfigSchoolIdFilterAsync`, `ApimHelper.GetApimNextUrl()`, `CancellationToken` threaded (R1); `Output` matches the ticket's ViewModels, HATEOAS `ReferenceLink` uses REAL endpoint URLs (flag placeholder `"Endpoint not yet implemented"`), `[ExcludeFromCodeCoverage]`, `[ApplySieve]` on paged outputs (R3); no empty catch, no `async void`, no sync blocking (`.Result`/`.Wait()`/`.GetAwaiter().GetResult()`) — but `.Results` (plural, `PagedResult.Results`) is NOT a violation — `Result.Fail(...)` carries `.WithMetadata("StatusCode", …)`, Newtonsoft not `System.Text.Json`, DI over `new Service()`, no leftover `TODO`/`HACK`/`FIXME`/`#region` (R4); and — per §15 — if `PublicChangeLog.md` changed, emit **exactly ONE consolidated `info` finding** (category `Documentation`) covering all its issues at once (wrong/stale date, duplicate entry, raw `AB#…` work-item bullet, missing blank line), never one finding per issue (R4); NUnit + NSubstitute (flag Moq), `[Retry(2)]` + real `[TestCaseId("NNNNNN")]` (never invented), `public` test classes, `FixtureBuilder.GetGatewayClient()`, `.AddQuery()` not query-string-in-URL, typed `Should().BeInAscendingOrder(...)`, FluentAssertions not classic `Assert.*` (but `Assert.IsEmpty` is allowed), DistrictWide happy-path asserts `PageSize.Should().Be(50)`, a new feature file with no matching `SISApi.APITests` test is a warning, no hardcoded bearer tokens (error) (R5).
+The concrete rubric checks a careful reviewer looks for (distribute to the owning reviewer): feature-based placement + MediatR delegation + `sealed` query/command with nested `Handler` (R1); controller inherits `ExternalApiController`, `[Authorize(AuthenticationSchemes="ApiAuthentication")]` + `[Authorize(Roles="{Domain}Read")]`, `[ApiVersion]`/`[MapToApiVersion]`, `[ProducesResponseType]`, `CancellationToken` on actions, write verbs carry `{Domain}Write` (R2); `QuerySanitizer.Sanitize()`, `AddSchoolCodeFilterAsync`/`AddConfigSchoolIdFilterAsync`, `ApimHelper.GetApimNextUrl()`, `CancellationToken` threaded (R1); `Output` matches the ticket's ViewModels, **every `Output` property is mappable from the upstream `{Resource}Dto` decompiled in Phase 1b — flag any `Output` (or inherited-from-`Input`) property with NO corresponding source field on the upstream DTO as a `warning` (category `DTO & Model`): the contract advertises data the source can never populate (this is exactly the `StudentReference`-never-populated class of bug); conversely note any upstream field the ticket's ViewModels expect but the `Output` drops** (calibrate confidence to the Phase-1b fidelity level — do NOT raise a hard mapping finding when Phase 1b logged the XML-doc-only or skipped fallback, downgrade to `info` phrased as "could not fully verify against upstream DTO"), HATEOAS `ReferenceLink` uses REAL endpoint URLs (flag placeholder `"Endpoint not yet implemented"`), `[ExcludeFromCodeCoverage]`, `[ApplySieve]` on paged outputs (R3); no empty catch, no `async void`, no sync blocking (`.Result`/`.Wait()`/`.GetAwaiter().GetResult()`) — but `.Results` (plural, `PagedResult.Results`) is NOT a violation — `Result.Fail(...)` carries `.WithMetadata("StatusCode", …)`, Newtonsoft not `System.Text.Json`, DI over `new Service()`, no leftover `TODO`/`HACK`/`FIXME`/`#region` (R4); and — per §15 — if `PublicChangeLog.md` changed, emit **exactly ONE consolidated `info` finding** (category `Documentation`) covering all its issues at once (wrong/stale date, duplicate entry, raw `AB#…` work-item bullet, missing blank line), never one finding per issue (R4); NUnit + NSubstitute (flag Moq), `[Retry(2)]` + real `[TestCaseId("NNNNNN")]` (never invented), `public` test classes, `FixtureBuilder.GetGatewayClient()`, `.AddQuery()` not query-string-in-URL, typed `Should().BeInAscendingOrder(...)`, FluentAssertions not classic `Assert.*` (but `Assert.IsEmpty` is allowed), DistrictWide happy-path asserts `PageSize.Should().Be(50)`, a new feature file with no matching `SISApi.APITests` test is a warning, no hardcoded bearer tokens (error) (R5).
 
 **Severity mapping** (every reviewer): REQUIRED violation → `error`; RECOMMENDED → `warning`; NICE-TO-HAVE → `info`. Be precise and avoid false positives — a wrong finding wastes the user's validation time. Give each finding a concrete `file:line`, a clear message, an actionable suggestion, and a short `codeExample` (before/after) where it helps.
 
