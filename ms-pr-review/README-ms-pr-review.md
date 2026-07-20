@@ -3,7 +3,10 @@
 Runs a **full semantic code review** of open PRs in `nelnet-nbs/sis-services` (the SIS
 microservices monorepo) **six times a day on weekdays** (08:00, 10:00, 12:00, 14:00, 16:00,
 18:00 local time) and writes a self-contained HTML report per PR to
-`C:\Users\lbautist\Downloads\PR Review MS\`.
+`%USERPROFILE%\Downloads\PR Review MS\`.
+
+**Runs as whoever checked it out.** The reviewer is auto-detected via `gh api user -q .login`,
+and the PRs reviewed are **your teammates' — the team roster minus you**. See [Configuration](#configuration).
 
 This is a **separate, independent setup** from the gateway review (`GW-PRReview` →
 `sis-externalapi`). The two tasks run side by side, target different repos, use different
@@ -81,22 +84,36 @@ $d = "C:\neldevsrc\Github\TaskScheduler\ms-pr-review\logs\MS-PRReview"
 Get-ChildItem $d | Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait $_.FullName }
 ```
 
-Reports land in `C:\Users\lbautist\Downloads\PR Review MS\` as `PR-<number>-<slug>.html` (one per PR).
+Reports land in `%USERPROFILE%\Downloads\PR Review MS\` as `PR-<number>-<slug>.html` (one per PR).
 
 ## What gets reviewed
 
 A PR is reviewed only if:
 
 - it is **not a draft**, and
-- it is **authored by or assigned to** `junie-perez-110467` (Junie Perez) or
-  `paul-gatchalian-110466` (Paul Gatchalian) — **no other authors**, and
+- it is **authored by or assigned to one of your teammates** (the team roster minus you — see
+  [Configuration](#configuration)), and
 - it was **updated in the last 7 days**, and
-- you (`mikko-bautista-113580`) have **not already approved** it, and
+- **you have not already approved** it (your `gh` login is auto-detected), and
 - it hasn't been **reviewed yet** — no `PR-<number>-*.html` exists for it (**1 PR = 1 HTML**).
 
 One report per PR: a PR is reviewed once and is **not** re-reviewed on later commits. The wrapper
 also **skips launching Claude entirely** when every eligible open PR already has a report, so an
 idle run costs nothing. To force a fresh review, delete that PR's HTML from the output folder.
+
+## Configuration
+
+Identity and paths are **auto-detected per user** — nobody edits the scripts. Two files at the
+repo root (`ExternalAPITaskSchedulerPrompt\`) drive all four projects:
+
+| File | Committed? | Purpose |
+|------|-----------|---------|
+| `team-roster.json`   | yes | The team: one `{ "name", "github" }` per dev. **Add a teammate = one line here.** Your own login (`gh api user -q .login`) is subtracted to get the review list. |
+| `config.local.json`  | no (git-ignored) | Per-machine paths (`repoExternalApi`, `repoServices`, `envFile`, `outputBase`). Copy `config.local.example.json` → `config.local.json` and edit **only if your checkout differs** from the defaults; otherwise paths resolve under your `%USERPROFILE%`. |
+| `lib/team.ps1`       | yes | Shared PowerShell helpers dot-sourced by every wrapper. |
+
+The wrapper computes `reviewAuthors = roster − you` and injects the resolved logins/paths into the
+prompt (`{{REVIEW_AUTHORS}}` / `{{CURRENT_USER}}` / `{{OUTPUT_DIR}}` placeholders) before launch.
 
 ## Reading a report
 
@@ -122,8 +139,9 @@ Everything below is edit-a-file; no rebuild.
 - **Times / days** — re-run `register-ms-pr-review-task.ps1` with `-Times '09:00','13:00',...`.
 - **Model** — default is `opus` (best for semantic review). For cheaper/faster runs register with
   `-Model sonnet`, or edit the `$Model` default in `run-ms-pr-review.ps1`.
-- **Authors, approval owner, 7-day window** — edit Step 1 of `pr-review-ms-prompt.md` (and the
-  `$reviewAuthors` pre-check list in `run-ms-pr-review.ps1`).
+- **Team members** — edit `team-roster.json` at the repo root (add/remove a `{ "name", "github" }`).
+  The review list is derived automatically as *roster minus the current user*; no script edits needed.
+- **7-day window** — edit Step 1 of `pr-review-ms-prompt.md`.
 - **Rules / severities** — edit `pr-review-ms-standards.md`.
 - **Report look** — edit `pr-review-ms-template.html` (CSS + render JS).
 

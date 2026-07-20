@@ -125,7 +125,7 @@ h2::before{content:'';width:22px;height:2px;background:var(--accent);border-radi
   <div class="hero">
     <span class="tag">SIS External API · Automation</span>
     <h1>How <span class="mono">GW-PRReview</span> Works</h1>
-    <p>A Windows scheduled task that runs a <b>read-only, Claude-powered code review</b> of Junie &amp; Paul's open pull requests six times a day, and drops a self-contained <b>HTML report per PR</b> in your Downloads folder for you to validate — it never comments on or approves anything itself.</p>
+    <p>A Windows scheduled task that runs a <b>read-only, Claude-powered code review</b> of <b>your teammates'</b> open pull requests (the team roster minus whoever is running it) six times a day, and drops a self-contained <b>HTML report per PR</b> in your Downloads folder for you to validate — it never comments on or approves anything itself.</p>
     <div class="chips">
       <span class="chip">⏰ Mon–Fri · 6×/day</span>
       <span class="chip">🔎 Full semantic review</span>
@@ -219,7 +219,7 @@ h2::before{content:'';width:22px;height:2px;background:var(--accent);border-radi
       <h3>🚦 Eligibility gate — <span style="color:var(--text3);font-weight:600;font-size:12px">reviewed only if ALL true</span></h3>
       <div class="pills">
         <div class="pill"><div class="ck">✓</div><div class="pt"><b>Not a draft</b></div></div>
-        <div class="pill"><div class="ck">✓</div><div class="pt">Authored by / assigned to <b>Junie</b> or <b>Paul</b></div></div>
+        <div class="pill"><div class="ck">✓</div><div class="pt">Authored by / assigned to <b>a teammate</b> (roster minus you)</div></div>
         <div class="pill"><div class="ck">✓</div><div class="pt">Updated in the <b>last 7 days</b></div></div>
         <div class="pill"><div class="ck">✓</div><div class="pt">You <b>haven't approved</b> it yet</div></div>
         <div class="pill"><div class="ck">✓</div><div class="pt"><b>Not reviewed yet</b> — no report exists <span style="color:var(--text3)">(1 PR = 1 HTML)</span></div></div>
@@ -283,7 +283,7 @@ h2::before{content:'';width:22px;height:2px;background:var(--accent);border-radi
   </div>
 
   <div class="footer">
-    <b>GW-PRReview</b> · read-only PR review for <span class="mono">nelnet-nbs/sis-externalapi</span> · reports in <span class="mono">C:\Users\lbautist\Downloads\PR Review\</span><br>
+    <b>GW-PRReview</b> · read-only PR review for <span class="mono">nelnet-nbs/sis-externalapi</span> · reports in <span class="mono">%USERPROFILE%\Downloads\PR Review\</span><br>
     Runs as you (Interactive token) only while logged on · needs a one-time <span class="mono">gh auth login</span> to go live.
   </div>
 

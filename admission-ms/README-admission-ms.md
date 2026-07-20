@@ -32,8 +32,9 @@ It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, th
    **`Modernization Team`** (org `renweb`, project `ColdFusion`). Always tracks the live sprint.
 2. **Admissions stories assigned to you** — a WIQL query for `WorkItemType = 'User Story'`,
    `State = 'Active'`, `AssignedTo = @Me`, in that iteration, whose **title contains `Admissions`**
-   (title-tag filter; matches Paul's `[AdmissionsMS]` convention). `@Me` resolves to the identity
-   that owns `ADO_PAT`. **Rule: assigned to you + Active → proceed; otherwise skip.**
+   (title-tag filter; matches the team's `[AdmissionsMS]` convention). `@Me` resolves to the identity
+   that owns `ADO_PAT` — i.e. **whoever is running this** — so each dev generates for their own stories.
+   **Rule: assigned to you + Active → proceed; otherwise skip.**
 3. **Branch name** — one branch per run built from the story IDs (sorted ascending):
    - single story → `story/<id>`
    - multiple → `story/<id1>_<id2>_<id3>` (all endpoints generated on that one branch)
@@ -49,7 +50,7 @@ It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, th
 
 ## One-time setup
 
-1. **Credentials** — `C:\Users\lbautist\repos\.env` must define:
+1. **Credentials** — `%USERPROFILE%\repos\.env` (override via `config.local.json` → `envFile`) must define:
    ```
    ADO_PAT=<PAT with Work Items: Read>
    ADO_ORG=renweb
@@ -117,8 +118,8 @@ pwsh -File ...\register-admission-ms-task.ps1 -Unregister
 
 - Authoritative: `sis-services/.architecture/microservices-architecture.md`.
 - Operationalized rulebook + false-positive carve-outs: `ms-pr-review/pr-review-ms-standards.md`.
-- **Reference PR (live, per run):** the latest merged endpoint PR by **Paul Gatchalian**
-  (`paul-gatchalian-110466`) or **Junie Perez** (`junie-perez-110467`), looked up via `gh pr list`
+- **Reference PR (live, per run):** the latest merged endpoint PR by **one of your teammates**
+  (the team roster minus you, from `team-roster.json`), looked up via `gh pr list`
   and matched to the story's operation type. Its file list is the **completeness checklist** — it is
   what guarantees the generator ships the full test surface, not just the production files.
 - Exemplar slices copied for shape (fallback if `gh` is unavailable): `Features/OAEmergencyPickupField/`

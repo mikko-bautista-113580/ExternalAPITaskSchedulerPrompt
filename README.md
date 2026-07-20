@@ -12,7 +12,13 @@ The four jobs fall into two families:
   commit, push, open a PR, or write back to ADO.
 - **PR reviewers** — run a full semantic code review of open PRs and write a self-contained HTML
   report per PR. They are **strictly read-only** on GitHub and on your working tree; nothing is
-  posted unless *you* click a button in the report.
+  posted unless *you* click a button in the report. They review **your teammates' PRs — the team
+  roster minus you** (see [Configuration](#configuration)).
+
+All four jobs **auto-detect whoever runs them** — no per-user edits. Endpoint generators build for
+your own ADO stories (`@Me`); PR reviewers detect your GitHub login (`gh api user -q .login`) and
+review everyone else on the team. So Paul's checkout reviews Mikko + Junie, Junie's reviews Paul +
+Mikko, and so on.
 
 ## Jobs
 
@@ -48,10 +54,24 @@ Every folder follows the same shape:
 - **PowerShell 7** (`pwsh`).
 - **GitHub CLI** (`gh`) logged in and SSO-authorized for `nelnet-nbs` — required by the PR
   reviewers and by the endpoint generators' reference-PR lookup.
-- **ADO credentials** in `C:\Users\lbautist\repos\.env` (`ADO_PAT`, `ADO_ORG`, `ADO_PROJECT`) —
-  required by the endpoint generators. Read scope only.
+- **ADO credentials** in `%USERPROFILE%\repos\.env` (`ADO_PAT`, `ADO_ORG`, `ADO_PROJECT`) — required
+  by the endpoint generators. Read scope only. (Override the location via `config.local.json` → `envFile`.)
 
 See each job's README for the exact one-time setup.
+
+## Configuration
+
+Identity and paths are resolved at runtime, so a teammate just clones and registers — no script
+edits. Three shared files at this repo root drive all four jobs:
+
+| File | Committed? | Purpose |
+|---|---|---|
+| `team-roster.json` | yes | The team: one `{ "name", "github" }` per dev. **Add/remove a teammate = one line.** PR reviewers subtract the current user's `gh` login to get the review list; endpoint generators use it for the reference-PR authors. |
+| `config.local.json` | **no** (git-ignored) | Per-machine paths (`repoExternalApi`, `repoServices`, `envFile`, `outputBase`). Copy `config.local.example.json` → `config.local.json` and edit **only if your checkout differs** from the defaults; `%USERPROFILE%` is expanded. Absent → USERPROFILE-based defaults (logged). |
+| `lib/team.ps1` | yes | Shared PowerShell helpers (`Get-ReviewAuthors`, `Resolve-LocalConfig`, `Get-CurrentGitHubLogin`) dot-sourced by every wrapper. |
+
+The wrappers inject the resolved identity/paths into each prompt via placeholders
+(`{{CURRENT_USER}}`, `{{REVIEW_AUTHORS}}`, `{{REPO_ROOT}}`, `{{OUTPUT_DIR}}`, `{{ENV_FILE}}`, …).
 
 ## Common commands
 
@@ -84,7 +104,8 @@ cheaper/faster runs.
 - **PR reviewers are read-only:** only `gh` read subcommands / GET, no working-tree writes beyond
   the HTML reports. Findings are posted to GitHub only when you click a button in the report.
 
-> **Note on paths:** the per-job READMEs reference an older location
-> (`C:\neldevsrc\Github\TaskScheduler\...`). This repo now lives at
-> `C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\`; adjust paths accordingly when copying
-> commands.
+> **Note on paths:** the wrappers resolve the scheduler folder from their own location
+> (`$PSScriptRoot`) and target-repo / output / `.env` paths from `config.local.json` (see
+> [Configuration](#configuration)), so a checkout works from wherever you clone it. Any absolute
+> path still shown in a per-job README is illustrative — the defaults resolve under your
+> `%USERPROFILE%` unless you override them.

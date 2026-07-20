@@ -1,0 +1,7 @@
+{
+  "_comment": "Per-machine paths. Copy this file to config.local.json and edit for your checkout. config.local.json is git-ignored. %USERPROFILE% is expanded at runtime. If config.local.json is absent, the run scripts fall back to these same defaults and log the assumption.",
+  "repoExternalApi": "c:\\neldevsrc\\Github\\sis-externalapi",
+  "repoServices":    "c:\\neldevsrc\\Github\\sis-services",
+  "envFile":         "%USERPROFILE%\\repos\\.env",
+  "outputBase":      "%USERPROFILE%\\Downloads"
+}

@@ -14,21 +14,21 @@ The user has **explicitly authorized this scheduled task** to create a local bra
 
 ## Execution environment
 
-- Working dir: `c:\neldevsrc\Github\sis-services`. The wrapper has verified the working tree is **clean**, fetched `origin`, and confirmed the target branch does not yet exist (idempotency) before launching you.
-- **ADO access (read-only):** credentials live in `C:\Users\lbautist\repos\.env` (`ADO_PAT`, `ADO_ORG`, `ADO_PROJECT`). Read story detail via the REST API using the PAT as HTTP Basic auth (`Authorization: Basic base64(":$ADO_PAT")`). Prefer PowerShell `Invoke-RestMethod`. `az boards work-item show --id <id>` also works if an `az` session is present; REST is the reliable path.
+- Working dir: `{{REPO_ROOT}}`. The wrapper has verified the working tree is **clean**, fetched `origin`, and confirmed the target branch does not yet exist (idempotency) before launching you.
+- **ADO access (read-only):** credentials live in `{{ENV_FILE}}` (`ADO_PAT`, `ADO_ORG`, `ADO_PROJECT`). Read story detail via the REST API using the PAT as HTTP Basic auth (`Authorization: Basic base64(":$ADO_PAT")`). Prefer PowerShell `Invoke-RestMethod`. `az boards work-item show --id <id>` also works if an `az` session is present; REST is the reliable path.
 - **The wrapper appends a "Runtime inputs" block to the end of this prompt** with the exact ADO org/project, current sprint, target branch name, and the list of Active Admissions stories. **That block is authoritative for this run** — use those IDs and that exact branch name.
 
 ## Reference material — READ THESE FIRST (they define the required shape)
 
-1. **`c:\neldevsrc\Github\sis-services\.architecture\microservices-architecture.md`** — THE authoritative microservices standard. Its REQUIRED rules are the bar.
-2. **`C:\neldevsrc\Github\TaskScheduler\ms-pr-review\pr-review-ms-standards.md`** — the operationalized rulebook (severities + real-world variance + false-positive carve-outs). If it and the architecture doc disagree on what is REQUIRED, **the architecture doc wins.**
-3. **Reference PR — the latest merged endpoint PR by Paul Gatchalian or Junie Perez (AUTHORITATIVE for the COMPLETE file set).**
-   These two engineers own the endpoint-generation pattern; their most recently merged PR is the *ground truth* for exactly which files a finished endpoint ships — **including the full API/integration-test tier that a build-only run tends to skip.** Before coding, look it up live via `gh` and mirror its file set:
+1. **`{{REPO_ROOT}}\.architecture\microservices-architecture.md`** — THE authoritative microservices standard. Its REQUIRED rules are the bar.
+2. **`{{SCHEDULED_DIR}}\..\ms-pr-review\pr-review-ms-standards.md`** — the operationalized rulebook (severities + real-world variance + false-positive carve-outs). If it and the architecture doc disagree on what is REQUIRED, **the architecture doc wins.**
+3. **Reference PR — the latest merged endpoint PR by one of your teammates (AUTHORITATIVE for the COMPLETE file set).**
+   Your teammates own the endpoint-generation pattern; their most recently merged PR is the *ground truth* for exactly which files a finished endpoint ships — **including the full API/integration-test tier that a build-only run tends to skip.** Before coding, look it up live via `gh` and mirror its file set. `{{REFERENCE_AUTHORS}}` is the team roster minus you (the wrapper fills it in); if you see a literal `{{REFERENCE_AUTHORS}}`, read `team-roster.json` at the repo root and use every `github` login except your own (`gh api user -q .login`):
 
    ```
-   # GitHub logins:  Paul = paul-gatchalian-110466   Junie = junie-perez-110467
-   gh pr list --repo nelnet-nbs/sis-services --state merged --author paul-gatchalian-110466 --limit 10 --json number,title,mergedAt,url
-   gh pr list --repo nelnet-nbs/sis-services --state merged --author junie-perez-110467   --limit 10 --json number,title,mergedAt,url
+   # Reference-PR authors (roster minus you): {{REFERENCE_AUTHORS}}
+   # Run this once per login above:
+   gh pr list --repo nelnet-nbs/sis-services --state merged --author <login> --limit 10 --json number,title,mergedAt,url
    ```
    Pick the most recent PR **whose title matches the operation type you are generating** — a GET/list story → a `GET -` PR; a write story → a `PUT`/`POST`/`Upsert` PR. Prefer an `[AdmissionsMS]` PR; if the newest matching one is for another MS (e.g. `[CafeteriaMS]`), that's fine — the vertical-slice + test shape is identical across services; only namespaces/paths differ. Then enumerate its complete file set and read the key files:
    ```
@@ -44,8 +44,8 @@ The user has **explicitly authorized this scheduled task** to create a local bra
 
 ## Pre-flight
 
-1. Confirm `Get-Location` is `c:\neldevsrc\Github\sis-services`. If not, log `FATAL: wrong working directory` and exit 0.
-2. Confirm `C:\Users\lbautist\repos\.env` exists and `ADO_PAT` is readable. If not, log `FATAL: ADO_PAT unavailable` and exit 0.
+1. Confirm `Get-Location` is `{{REPO_ROOT}}`. If not, log `FATAL: wrong working directory` and exit 0.
+2. Confirm `{{ENV_FILE}}` exists and `ADO_PAT` is readable. If not, log `FATAL: ADO_PAT unavailable` and exit 0.
 3. Read the reference sources above (architecture doc, rulebook, the latest reference PR via `gh`, and the committed exemplar slices) before writing any code. The reference PR's file list is your completeness checklist.
 4. Read the target branch name and the story list from the **Runtime inputs** block at the end of this prompt.
 

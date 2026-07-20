@@ -4,11 +4,13 @@
 
 $ErrorActionPreference = 'Continue'
 
-$RepoRoot      = 'c:\neldevsrc\Github\sis-externalapi'
-# Relocated out of the repo: this wrapper + its prompt/logs/lock now live under the
-# central TaskScheduler folder. $RepoRoot still points at the sis-externalapi checkout
-# that claude operates on; only the scheduler-side artifacts moved here.
 $ScheduledDir  = $PSScriptRoot   # this folder — logs/prompt/lock live alongside the wrapper
+
+# Shared path resolution (per-machine repo/env paths). $RepoRoot still points at the
+# sis-externalapi checkout that claude operates on; only the scheduler-side artifacts live here.
+. "$ScheduledDir\..\lib\team.ps1"
+$cfg           = Resolve-LocalConfig
+$RepoRoot      = $cfg.repoExternalApi
 $LogDir        = Join-Path $ScheduledDir 'logs'
 $PromptFile    = Join-Path $ScheduledDir 'morning-gw-prompt.md'
 $ClaudeCmd     = "$env:APPDATA\npm\claude.cmd"
@@ -17,7 +19,7 @@ $TokenFile     = Join-Path $env:USERPROFILE '.claude\github-mcp-token.txt'
 # ---- ADO pre-check config (mirrors admission-ms: check for an eligible ticket
 #      BEFORE any git branch switching, so the run exits cheaply when there is
 #      nothing to work on). --------------------------------------------------
-$EnvFile       = 'C:\Users\lbautist\repos\.env'   # same file shared-ado-connect uses (ADO_PAT/ADO_ORG/ADO_PROJECT)
+$EnvFile       = $cfg.envFile   # same file shared-ado-connect uses (ADO_PAT/ADO_ORG/ADO_PROJECT)
 $AdoTeam       = 'Modernization Team'
 $TitleMarker   = 'ExternalAPIGW'                    # story-title tag that scopes this task
 
@@ -222,6 +224,11 @@ ORDER BY [System.Id] ASC
     }
 
     $Prompt = Get-Content $PromptFile -Raw
+    # Fill path placeholders (literal .Replace — safe for Windows paths). Identity is resolved
+    # inside the prompt via ADO @Me (the PAT owner), so no login substitution is needed here.
+    $Prompt = $Prompt.Replace('{{REPO_ROOT}}',     $RepoRoot)
+    $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}', $ScheduledDir)
+    $Prompt = $Prompt.Replace('{{ENV_FILE}}',      $EnvFile)
     Write-Log "Invoking claude directly in main repo (no worktree) ..."
     Write-Log "Streaming claude events to log (stream-json -> parsed). Tail with: Get-Content -Wait `"$LogFile`""
 

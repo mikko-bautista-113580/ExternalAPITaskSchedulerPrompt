@@ -7,13 +7,18 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-$RepoRoot     = 'c:\neldevsrc\Github\sis-externalapi'
 $ScheduledDir = $PSScriptRoot   # this folder — automation files live alongside the wrapper
+
+# Shared identity + path resolution (roster minus self, per-machine paths).
+. "$ScheduledDir\..\lib\team.ps1"
+$cfg = Resolve-LocalConfig
+
+$RepoRoot     = $cfg.repoExternalApi
 $LogDir       = Join-Path $ScheduledDir 'logs'
 $PromptFile   = Join-Path $ScheduledDir 'pr-review-prompt.md'
 $TemplateFile = Join-Path $ScheduledDir 'pr-review-template.html'
 $ClaudeCmd    = "$env:APPDATA\npm\claude.cmd"
-$OutputDir    = 'C:\Users\lbautist\Downloads\PR Review'
+$OutputDir    = Join-Path $cfg.outputBase 'PR Review'
 
 $TaskLogDir = Join-Path $LogDir $TaskName
 if (-not (Test-Path $TaskLogDir)) { New-Item -ItemType Directory -Path $TaskLogDir -Force | Out-Null }
@@ -67,6 +72,19 @@ if (-not $ghOk) {
     exit 1
 }
 
+# ---- identity: who is running this, and whose PRs they review --------------
+# reviewAuthors = team roster minus the current user (auto-detected via gh).
+try {
+    $meLogin       = Get-CurrentGitHubLogin
+    $reviewAuthors = @(Get-ReviewAuthors -CurrentLogin $meLogin)
+    Write-Log "Current user (gh): $meLogin"
+    Write-Log "Reviewing PRs by:  $($reviewAuthors -join ', ')"
+} catch {
+    Write-Milestone 'X' "Could not resolve identity from roster/gh -- aborting."
+    Write-Log "FATAL: $_"
+    exit 1
+}
+
 # ---- concurrency guard -----------------------------------------------------
 $LockFile = Join-Path $ScheduledDir '.pr-review.lock'
 if (Test-Path $LockFile) {
@@ -103,7 +121,7 @@ try {
     # (incl. skip-if-you-approved). Any gh/parse error falls through to launching claude.
     $skipClaude = $false
     try {
-        $reviewAuthors = @('junie-perez-110467','paul-gatchalian-110466')
+        # $reviewAuthors computed above (roster minus current user).
         $openJson = gh pr list --repo nelnet-nbs/sis-externalapi --state open --limit 100 --json number,author,assignees,isDraft,updatedAt 2>$null
         if ($LASTEXITCODE -eq 0 -and $openJson) {
             $openPrs = $openJson | ConvertFrom-Json
@@ -263,6 +281,13 @@ try {
         Write-Milestone '>' "Launching claude (model=$Model) for read-only PR review..."
 
         $Prompt = Get-Content $PromptFile -Raw
+        # Fill identity/path placeholders so the prompt reflects whoever is running.
+        # .Replace() is literal (no regex/backslash/$ pitfalls with Windows paths).
+        $Prompt = $Prompt.Replace('{{REVIEW_AUTHORS}}', ($reviewAuthors -join ', '))
+        $Prompt = $Prompt.Replace('{{CURRENT_USER}}',   $meLogin)
+        $Prompt = $Prompt.Replace('{{OUTPUT_DIR}}',     $OutputDir)
+        $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}',  $ScheduledDir)
+        $Prompt = $Prompt.Replace('{{REPO_ROOT}}',      $RepoRoot)
         try {
             $Prompt | & $ClaudeCmd `
                 --print `

@@ -17,13 +17,18 @@ $TitleMarker   = 'AdmissionsMS'                   # story-title tag that scopes 
 # ============================================================================
 
 $Repo          = 'nelnet-nbs/sis-services'
-$RepoRoot      = 'c:\neldevsrc\Github\sis-services'
-$ServiceDir    = Join-Path $RepoRoot $ServiceRel
 $ScheduledDir  = $PSScriptRoot   # this folder — logs/prompt/lock live alongside the wrapper
+
+# Shared path resolution (per-machine repo/env paths) + roster (reference-PR authors).
+. "$ScheduledDir\..\lib\team.ps1"
+$cfg           = Resolve-LocalConfig
+
+$RepoRoot      = $cfg.repoServices
+$ServiceDir    = Join-Path $RepoRoot $ServiceRel
 $LogDir        = Join-Path $ScheduledDir 'logs'
 $PromptFile    = Join-Path $ScheduledDir "$MsName-prompt.md"
 $ClaudeCmd     = "$env:APPDATA\npm\claude.cmd"
-$EnvFile       = 'C:\Users\lbautist\repos\.env'
+$EnvFile       = $cfg.envFile
 $LockFile      = Join-Path $ScheduledDir ".$MsName.lock"
 $AdoTeam       = 'Modernization Team'
 
@@ -389,7 +394,24 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
     Write-Milestone 'v' "Pre-flight passed (ADO reachable, sprint resolved, tree clean, origin fetched)."
     Write-Milestone '>' "Launching claude (model=$Model) to generate endpoint(s) on $branchName..."
 
+    # Reference-PR authors = the teammates whose merged endpoint PRs are the canonical file-set
+    # template (roster minus you). gh may be unavailable in the scheduled env — fall back to the
+    # full roster rather than failing the build (the prompt also has committed exemplars).
+    try {
+        $meLogin    = Get-CurrentGitHubLogin
+        $refAuthors = @(Get-ReviewAuthors -CurrentLogin $meLogin)
+    } catch {
+        $refAuthors = @(Get-TeamRoster | ForEach-Object { $_.github })
+        Write-Log "Reference authors: gh login unavailable ($_); using full roster."
+    }
+    Write-Log "Reference-PR authors: $($refAuthors -join ', ')"
+
     $Prompt = (Get-Content $PromptFile -Raw) + "`n" + $contextBlock
+    # Fill path/identity placeholders (literal .Replace — safe for Windows paths).
+    $Prompt = $Prompt.Replace('{{REFERENCE_AUTHORS}}', ($refAuthors -join ', '))
+    $Prompt = $Prompt.Replace('{{REPO_ROOT}}',     $RepoRoot)
+    $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}', $ScheduledDir)
+    $Prompt = $Prompt.Replace('{{ENV_FILE}}',      $EnvFile)
     $script:ClaudeLaunched = $true
     try {
         $Prompt | & $ClaudeCmd `

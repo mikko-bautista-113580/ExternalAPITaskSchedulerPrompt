@@ -1,4 +1,4 @@
-You are running as a Windows scheduled task. Your job is to **scaffold the Gateway GET endpoint code locally** for the next eligible active Azure DevOps ticket assigned to lestermikko.bautista@nelnet.net. **Do not commit, do not push, do not open a PR.** Generate the files in the working tree on a new `story/{id}` branch and stop — the user reviews the modified/added files in their IDE and decides whether to commit + push, or discard.
+You are running as a Windows scheduled task. Your job is to **scaffold the Gateway GET endpoint code locally** for the next eligible active Azure DevOps ticket assigned to **you** — i.e. the identity that owns `ADO_PAT` (use `[System.AssignedTo] = @Me` in WIQL; `@Me` resolves to whoever is running this). **Do not commit, do not push, do not open a PR.** Generate the files in the working tree on a new `story/{id}` branch and stop — the user reviews the modified/added files in their IDE and decides whether to commit + push, or discard.
 
 **Single-ticket-per-run policy.** Process AT MOST ONE eligible ticket per scheduled run. If the user has multiple active ExternalAPIGW tickets, pick the one with the lowest work-item ID and skip the rest with `SKIPPED (queued — process one at a time)`. This keeps the working tree readable and avoids piling uncommitted files from multiple tickets onto one branch.
 
@@ -24,7 +24,7 @@ Other rules from `.claude/CLAUDE.md` STILL APPLY: no merge/rebase/force-push, no
 
 ## Execution environment
 
-You are running directly inside the user's main repo at `c:\neldevsrc\Github\sis-externalapi` (NOT a worktree). The wrapper has already:
+You are running directly inside the user's main repo at `{{REPO_ROOT}}` (NOT a worktree). The wrapper has already:
 - `cd`-ed into the repo
 - `git fetch origin main` and fast-forwarded local `main` to `origin/main`
 - Verified `git status` is clean for tracked files (the user's WIP is in untracked / .mcp.json — wrapper records the WIP file list at start)
@@ -39,7 +39,7 @@ What this means for you:
 **Do this before anything else.** Query ADO for an eligible ticket up front so the run exits cheaply when there is nothing to work on — no point running the git pre-flight, switching branches, or touching the working tree if the user has no active ExternalAPIGW ticket in the current iteration.
 
 1. Use the Azure DevOps MCP to find the current iteration for project=`ColdFusion`, team=`Modernization Team` (use `mcp__azure__work_list_iterations` or `mcp__azure__work_list_team_iterations` with `timeFrame=current`).
-2. List work items in that iteration where `AssignedTo` = lestermikko.bautista@nelnet.net AND `State` = "Active" (use `mcp__azure__wit_get_work_items_for_iteration` or `mcp__azure__wit_query_by_wiql`).
+2. List work items in that iteration where `AssignedTo` = `@Me` (the ADO PAT owner — whoever is running this) AND `State` = "Active" (use `mcp__azure__wit_get_work_items_for_iteration` or `mcp__azure__wit_query_by_wiql`).
 3. For each work item, fetch `id`, `System.Title`, and Domain/Resource info from the System Info / Technical Requirements fields.
 4. **Title filter (REQUIRED):** Keep only work items where `System.Title` contains the literal string `ExternalAPIGW` (case-insensitive). Log each discarded ticket as `SKIP (not ExternalAPIGW): {id} - {title}`.
 
@@ -49,7 +49,7 @@ What this means for you:
 
 Run these read-only checks only after Step 1 has found at least one eligible ticket:
 
-1. Confirm `Get-Location` (or `pwd`) returns exactly `c:\neldevsrc\Github\sis-externalapi`. If not, log `FATAL: not running in user's main repo` and exit immediately.
+1. Confirm `Get-Location` (or `pwd`) returns exactly `{{REPO_ROOT}}`. If not, log `FATAL: not running in user's main repo` and exit immediately.
 2. Confirm `git rev-parse --abbrev-ref HEAD` returns `main`. If not, log `FATAL: not on main branch` and exit — the wrapper should have left you on main; if you're not, something is wrong.
 3. Confirm `git rev-parse HEAD` matches `origin/main`. If not, log a warning and exit.
 4. Record the list of currently-uncommitted files via `git status --porcelain` and stash that list in memory. You'll use it at the end to verify the user's WIP was preserved.

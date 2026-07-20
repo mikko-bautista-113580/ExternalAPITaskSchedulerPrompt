@@ -72,7 +72,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 
-$description = "SIS External API: read-only PR review (Junie & Paul's open PRs) -> HTML reports in Downloads\PR Review. Weekdays 08/10/12/14/16/18."
+$description = "SIS External API: read-only PR review (teammates' open PRs, auto-detected per user) -> HTML reports in Downloads\PR Review. Weekdays 08/10/12/14/16/18."
 
 Register-ScheduledTask -TaskName $TaskName `
     -Action $action -Trigger $triggers -Principal $principal -Settings $settings `

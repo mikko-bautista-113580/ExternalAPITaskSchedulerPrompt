@@ -2,7 +2,11 @@
 
 Runs a **full semantic code review** of open PRs in `nelnet-nbs/sis-externalapi` **six times a
 day on weekdays** (08:00, 10:00, 12:00, 14:00, 16:00, 18:00 local time) and writes a
-self-contained HTML report per PR to `C:\Users\lbautist\Downloads\PR Review\`.
+self-contained HTML report per PR to `%USERPROFILE%\Downloads\PR Review\`.
+
+**Runs as whoever checked it out.** The reviewer is auto-detected via `gh api user -q .login`,
+and the PRs reviewed are **your teammates' — the team roster minus you**. So Paul's machine reviews
+Mikko + Junie, Junie's reviews Paul + Mikko, and so on. See [Configuration](#configuration) below.
 
 The review is done by Claude reading the **whole changed files** against
 `pr-review-standards.md` + `generate-get-endpoint.md`, instead of regex checks on the diff.
@@ -38,7 +42,7 @@ Then authorize the resulting token for the org's SAML SSO (nelnet-nbs uses SSO):
 
 ```powershell
 gh auth status                                   # confirm you're logged in
-gh api user -q .login                            # should print: mikko-bautista-113580
+gh api user -q .login                            # prints YOUR login; must match your entry in team-roster.json
 gh pr list --repo nelnet-nbs/sis-externalapi --limit 1   # must succeed (proves SSO ok)
 ```
 
@@ -61,21 +65,36 @@ $d = "C:\neldevsrc\Github\TaskScheduler\gw-pr-review\logs\GW-PRReview"
 Get-ChildItem $d | Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait $_.FullName }
 ```
 
-Reports land in `C:\Users\lbautist\Downloads\PR Review\` as `PR-<number>-<slug>.html` (one per PR).
+Reports land in `%USERPROFILE%\Downloads\PR Review\` as `PR-<number>-<slug>.html` (one per PR).
 
 ## What gets reviewed
 
 A PR is reviewed only if:
 
 - it is **not a draft**, and
-- it is **authored by or assigned to** `junie-perez-110467` or `paul-gatchalian-110466`, and
+- it is **authored by or assigned to one of your teammates** (the team roster minus you — see
+  [Configuration](#configuration)), and
 - it was **updated in the last 7 days**, and
-- you (`mikko-bautista-113580`) have **not already approved** it, and
+- **you have not already approved** it (your `gh` login is auto-detected), and
 - it hasn't been **reviewed yet** — no `PR-<number>-*.html` exists for it (**1 PR = 1 HTML**).
 
 One report per PR: a PR is reviewed once and is **not** re-reviewed on later commits. The wrapper
 also **skips launching Claude entirely** when every eligible open PR already has a report, so an
 idle run costs nothing. To force a fresh review, delete that PR's HTML from the output folder.
+
+## Configuration
+
+Identity and paths are **auto-detected per user** — nobody edits the scripts. Two files at the
+repo root (`ExternalAPITaskSchedulerPrompt\`) drive all four projects:
+
+| File | Committed? | Purpose |
+|------|-----------|---------|
+| `team-roster.json`          | yes | The team: one `{ "name", "github" }` per dev. **Add a teammate = one line here.** The reviewer's own login (from `gh api user -q .login`) is subtracted to get the review list. |
+| `config.local.json`         | no (git-ignored) | Per-machine paths (`repoExternalApi`, `repoServices`, `envFile`, `outputBase`). Copy `config.local.example.json` → `config.local.json` and edit **only if your checkout differs** from the defaults; otherwise paths resolve under your `%USERPROFILE%`. |
+| `lib/team.ps1`              | yes | Shared PowerShell helpers (`Get-ReviewAuthors`, `Resolve-LocalConfig`, …) dot-sourced by every wrapper. |
+
+The wrapper computes `reviewAuthors = roster − you` and injects the resolved logins/paths into the
+prompt (the `{{REVIEW_AUTHORS}}` / `{{CURRENT_USER}}` / `{{OUTPUT_DIR}}` placeholders) before launch.
 
 ## Reading a report
 

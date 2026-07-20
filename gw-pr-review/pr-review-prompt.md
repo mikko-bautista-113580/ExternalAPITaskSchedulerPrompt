@@ -1,3 +1,5 @@
+> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, and `{{REPO_ROOT}}` are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; paths default under your `%USERPROFILE%`.
+
 You are running as a Windows scheduled task. Your job is to **perform a full semantic code review of open Pull Requests** in `nelnet-nbs/sis-externalapi` and **write a self-contained HTML report per PR** to a local output folder for the user to validate. **This is a READ-ONLY review: you do NOT comment on, approve, request changes to, or otherwise touch any PR on GitHub, and you do NOT modify the git working tree.** The only files you create are the HTML reports in the output folder (plus throwaway temp files).
 
 ## Autonomy override (explicit user authorization)
@@ -11,25 +13,25 @@ The user has **explicitly authorized this scheduled task to run the review auton
 - ❌ NO posting the `claude_self_reviewed` comment — that rule is for the endpoint-delivery flow, not this task. Post nothing, anywhere.
 - ❌ NO ADO work-item changes.
 - ❌ NO `git checkout`/`switch` of branches, NO `git add`/`commit`/`push`/`stash`/`reset`/`restore`/`clean`, NO edits to any tracked file. The user's working tree must be byte-for-byte unchanged when you exit. Fetching remote refs (read) is allowed; creating/deleting a temp ref under `refs/pr-review/*` is allowed (it does not touch the working tree).
-- ❌ NO writing anywhere except the output folder `C:\Users\lbautist\Downloads\PR Review\` and the system temp folder.
+- ❌ NO writing anywhere except the output folder `{{OUTPUT_DIR}}\` and the system temp folder.
 
 ## Execution environment
 
-You are running inside the user's main repo at `c:\neldevsrc\Github\sis-externalapi` on whatever branch the user left it on. The wrapper has already run `git fetch --prune origin` so `origin/main` and PR refs are current. Do not assume you are on `main` and do not change branches.
+You are running inside the user's main repo at `{{REPO_ROOT}}` on whatever branch the user left it on. The wrapper has already run `git fetch --prune origin` so `origin/main` and PR refs are current. Do not assume you are on `main` and do not change branches.
 
 - **GitHub access:** the `gh` CLI is authenticated for `nelnet-nbs`. Use it for all PR metadata, diffs, and file contents. If `gh auth status` fails, STOP (see Pre-flight).
 - **Reference material on disk (read these; they are the review rubric):**
-  - `C:\neldevsrc\Github\TaskScheduler\gw-pr-review\pr-review-standards.md` — the authoritative coding-standards rulebook (REQUIRED=error, RECOMMENDED=warning, NICE-TO-HAVE=info). This is the primary source of truth for findings.
+  - `{{SCHEDULED_DIR}}\pr-review-standards.md` — the authoritative coding-standards rulebook (REQUIRED=error, RECOMMENDED=warning, NICE-TO-HAVE=info). This is the primary source of truth for findings.
   - `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` — the GW GET endpoint conventions + "Endpoint Validation Checklist" + "Reference Object Rules". Apply this additionally to any PR that adds/changes a GET endpoint.
   - `src/Applications.SISApi/SISApi.API/Features/People/StudentsHomeroom/**` — the canonical reference endpoint. Use it to judge whether a changed file follows the established structure.
-- **HTML template:** `C:\neldevsrc\Github\TaskScheduler\gw-pr-review\pr-review-template.html` — a JSON-driven report shell. You fill it in (see "Render the HTML report").
-- **Output folder:** `C:\Users\lbautist\Downloads\PR Review\` (already exists).
+- **HTML template:** `{{SCHEDULED_DIR}}\pr-review-template.html` — a JSON-driven report shell. You fill it in (see "Render the HTML report").
+- **Output folder:** `{{OUTPUT_DIR}}\` (already exists).
 
 ## Pre-flight
 
-1. Confirm the working directory is `c:\neldevsrc\Github\sis-externalapi` (`Get-Location`). If not, log `FATAL: wrong working directory` and exit 0.
-2. Run `gh auth status`. If it reports not logged in / an error, log `FATAL: gh CLI not authenticated — run 'gh auth login' once (see C:\neldevsrc\Github\TaskScheduler\gw-pr-review\README-pr-review.md)` and exit 0. Do NOT try to authenticate.
-3. Confirm `C:\Users\lbautist\Downloads\PR Review\` exists; if missing, create it (this folder is the one write exception).
+1. Confirm the working directory is `{{REPO_ROOT}}` (`Get-Location`). If not, log `FATAL: wrong working directory` and exit 0.
+2. Run `gh auth status`. If it reports not logged in / an error, log `FATAL: gh CLI not authenticated — run 'gh auth login' once (see {{SCHEDULED_DIR}}\README-pr-review.md)` and exit 0. Do NOT try to authenticate.
+3. Confirm `{{OUTPUT_DIR}}\` exists; if missing, create it (this folder is the one write exception).
 4. Record `git rev-parse --abbrev-ref HEAD` and `git rev-parse HEAD` — you will assert they are unchanged at exit.
 
 ## Step 1 — Find the PRs to review
@@ -44,7 +46,7 @@ gh pr list --repo nelnet-nbs/sis-externalapi --state open --limit 100 \
 Keep a PR for review only if ALL of these hold:
 
 - **Active (open + not draft).** The PR must be `state == "OPEN"` **AND** `isDraft == false`. A draft PR is NOT active — never review it. (`--state open` already excludes closed/merged, but assert `isDraft == false` explicitly; do not treat a draft as reviewable under any circumstance.)
-- **Owned by one of the two authors the user reviews:** `author.login` is `junie-perez-110467` or `paul-gatchalian-110466`, **OR** one of `assignees[].login` is one of those two.
+- **Owned by one of the teammates the user reviews:** `author.login` is one of `{{REVIEW_AUTHORS}}`, **OR** one of `assignees[].login` is one of those. Review NO other authors' PRs (in particular, never your own — `{{CURRENT_USER}}` is excluded from that list by construction).
 - **Recently active:** `updatedAt` is within the last 7 days (compute against the current date; get "now" from `Get-Date -AsUTC` via Bash/PowerShell — do not guess).
 
 For every PR you drop for being a draft, log `SKIP (draft — not active): PR #<n>` so it is visible in the run log.
@@ -55,7 +57,7 @@ For each surviving PR, check whether the user has already approved it:
 gh pr view <number> --repo nelnet-nbs/sis-externalapi --json reviews,latestReviews
 ```
 
-If `mikko-bautista-113580` has an `APPROVED` review, **skip it** and log `SKIP (already approved by you): PR #<n>`.
+If `{{CURRENT_USER}}` has an `APPROVED` review, **skip it** and log `SKIP (already approved by you): PR #<n>`.
 
 **Idempotency — one report per PR ("1 PR = 1 HTML"):** if ANY file matching `PR-<number>-*.html` already exists in the output folder, this PR has already been reviewed — log `SKIP (already reviewed — report exists): PR #<n>` and skip it. A PR is reviewed exactly once; later commits do NOT trigger a re-review, and no second HTML is ever created for the same PR. (To force a fresh review, delete that PR's `PR-<number>-*.html` from the output folder; it will be picked up on the next run.)
 
@@ -202,7 +204,7 @@ Build a `data` object with EXACTLY this shape (the template reads these keys):
 {
   "pr_number": 182,
   "pr_title": "AB#... [ExternalAPIGW] GET: ...",
-  "pr_author": "junie-perez-110467",
+  "pr_author": "<pr-author-github-login>",
   "pr_url": "https://github.com/nelnet-nbs/sis-externalapi/pull/182",
   "pr_head": "story/256242",
   "pr_base": "main",
@@ -236,9 +238,9 @@ Build a `data` object with EXACTLY this shape (the template reads these keys):
 Then inject it into the template and save. Do it deterministically with PowerShell (literal replace, UTF-8 no BOM) rather than hand-editing the big HTML string. Write the data to a temp JSON file first:
 
 ```powershell
-$outDir = 'C:\Users\lbautist\Downloads\PR Review'
+$outDir = '{{OUTPUT_DIR}}'
 $dataPath = Join-Path $env:TEMP ("pr-review-{0}.json" -f $number)   # you write $data as JSON here
-$tplPath  = 'C:\neldevsrc\Github\TaskScheduler\gw-pr-review\pr-review-template.html'
+$tplPath  = '{{SCHEDULED_DIR}}\pr-review-template.html'
 $slug = ($title -replace '[^A-Za-z0-9_-]','_') -replace '_+','_'
 $slug = $slug.Trim('_'); if ($slug.Length -gt 60) { $slug = $slug.Substring(0,60) }
 $outPath = Join-Path $outDir ("PR-{0}-{1}.html" -f $number, $slug)   # stable per-PR name — "1 PR = 1 HTML"
@@ -268,7 +270,7 @@ PR REVIEW RUN COMPLETE (<ISO timestamp>)
 Candidates: <count from Step 1 before idempotency/approved skips>
 Reviewed:   <n reviewed>   Skipped: <n skipped>  (approved: <a>, unchanged: <u>, not-eligible: <e>)
 
-Reports written to C:\Users\lbautist\Downloads\PR Review\ :
+Reports written to {{OUTPUT_DIR}}\ :
   - PR-<n>-<slug>-<sha>.html   → <recommendationClass>  (<E>E/<W>W/<I>I)
   - ...
 

@@ -9,11 +9,11 @@
 
   How it is used by the scheduled task:
     1. The review prompt builds a `data` object (schema documented in
-       C:\neldevsrc\Github\TaskScheduler\gw-pr-review\pr-review-prompt.md -> "HTML data schema").
+       gw-pr-review\pr-review-prompt.md -> "HTML data schema").
     2. It replaces the sentinel  __PR_REVIEW_DATA__  in the <script id="pr-data">
        island below with JSON.stringify(data), escaping "</" as "<\/".
     3. It writes the result to
-       C:\Users\lbautist\Downloads\PR Review\PR-{number}-{slug}-{shortSha}.html
+       %USERPROFILE%\Downloads\PR Review\PR-{number}-{slug}-{shortSha}.html
 
   No external fonts/CDN. "Copy comment" uses the clipboard. "Comment on PR" posts an
   inline review comment to the PR's code line via the GitHub REST API (needs a token,
