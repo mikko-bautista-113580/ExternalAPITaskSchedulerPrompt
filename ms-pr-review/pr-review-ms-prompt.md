@@ -42,9 +42,11 @@ gh pr list --repo nelnet-nbs/sis-services --state open --limit 100 \
 
 Keep a PR for review only if ALL of these hold:
 
-- **Not a draft** (`isDraft == false`).
+- **Active (open + not draft).** The PR must be `state == "OPEN"` **AND** `isDraft == false`. A draft PR is NOT active — never review it. (`--state open` already excludes closed/merged, but assert `isDraft == false` explicitly; do not treat a draft as reviewable under any circumstance.)
 - **Owned by one of the two authors the user reviews:** `author.login` is `junie-perez-110467` or `paul-gatchalian-110466`, **OR** one of `assignees[].login` is one of those two. Review NO other authors' PRs.
 - **Recently active:** `updatedAt` is within the last 7 days (compute against the current date; get "now" from `Get-Date -AsUTC` via Bash/PowerShell — do not guess).
+
+For every PR you drop for being a draft, log `SKIP (draft — not active): PR #<n>` so it is visible in the run log.
 
 For each surviving PR, check whether the user has already approved it:
 
@@ -65,6 +67,14 @@ You are the **orchestrator**. You alone touch git and `gh`, and you do so **seri
 **Process PRs one at a time** (sequential). For each PR, run these five phases in order.
 
 ### Phase 1 — Gather the change (orchestrator only; serial, read-only)
+
+**Re-confirm the PR is still Active FIRST (mandatory freshness gate).** The Step 1 list is a snapshot that can be stale (a PR may have been switched back to draft after it was listed, or the list `isDraft` value may be out of date). Before spending any work on a PR, re-query its live state and abort the PR if it is not Active:
+
+```
+gh pr view <n> --repo nelnet-nbs/sis-services --json isDraft,state
+```
+
+If `state != "OPEN"` or `isDraft == true`, do **NOT** review it: log `SKIP (draft — not active at review time): PR #<n>` (or `SKIP (no longer open): PR #<n>`) and move to the next PR. Only proceed to the gather step below when this fresh check confirms the PR is open and not a draft. This guarantees a draft is never reviewed even if it slipped through the Step 1 snapshot.
 
 ```
 gh pr view <n> --repo nelnet-nbs/sis-services \
