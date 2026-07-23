@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gateway PR Reviewer — Time-Efficiency Case</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✅</text></svg>">
+<style>
+  :root{
+    --ground:#0a1418; --panel:#0f1e24; --panel-2:#12262e;
+    --ink:#e6f4ee; --ink-dim:#9fc2b7; --ink-faint:#5f8578;
+    --line:#1e3a3f; --line-soft:#122127;
+    --accent:#3ed09a; --accent-2:#f2b04a;
+    --good:#4fd39a; --warn:#e6b450; --bad:#e8705f; --info:#7c9cf0;
+    --shadow:0 24px 60px -30px rgba(0,0,0,.72);
+    --fs-mono:"Cascadia Code","Consolas",ui-monospace,"SFMono-Regular",monospace;
+    --fs-sans:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ground:#e7f1ec; --panel:#ffffff; --panel-2:#eef6f2;
+      --ink:#0c1f1a; --ink-dim:#3f5d54; --ink-faint:#77968b;
+      --line:#cfe3db; --line-soft:#e3eee9;
+      --accent:#0f9e70; --accent-2:#b8730c;
+      --good:#12a173; --warn:#b7841c; --bad:#c8503f; --info:#4a63c8;
+      --shadow:0 24px 60px -34px rgba(20,60,48,.30);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0a1418; --panel:#0f1e24; --panel-2:#12262e;
+    --ink:#e6f4ee; --ink-dim:#9fc2b7; --ink-faint:#5f8578;
+    --line:#1e3a3f; --line-soft:#122127;
+    --accent:#3ed09a; --accent-2:#f2b04a; --good:#4fd39a; --warn:#e6b450; --bad:#e8705f; --info:#7c9cf0;
+    --shadow:0 24px 60px -30px rgba(0,0,0,.72);
+  }
+  :root[data-theme="light"]{
+    --ground:#e7f1ec; --panel:#ffffff; --panel-2:#eef6f2;
+    --ink:#0c1f1a; --ink-dim:#3f5d54; --ink-faint:#77968b;
+    --line:#cfe3db; --line-soft:#e3eee9;
+    --accent:#0f9e70; --accent-2:#b8730c; --good:#12a173; --warn:#b7841c; --bad:#c8503f; --info:#4a63c8;
+    --shadow:0 24px 60px -34px rgba(20,60,48,.30);
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0; background:var(--ground); color:var(--ink); font-family:var(--fs-sans); -webkit-font-smoothing:antialiased; overflow:hidden}
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:linear-gradient(var(--line-soft) 1px,transparent 1px),linear-gradient(90deg,var(--line-soft) 1px,transparent 1px);
+    background-size:64px 64px; opacity:.5; mask-image:radial-gradient(ellipse 90% 80% at 50% 45%,#000 30%,transparent 90%);
+  }
+
+  .deck{position:relative; height:100%; z-index:1}
+  .slide{position:absolute; inset:0; display:none; padding:clamp(28px,5vw,84px); flex-direction:column; justify-content:center; max-width:1180px; margin:0 auto; opacity:0; transform:translateY(14px)}
+  .slide.active{display:flex; animation:rise .5s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes rise{to{opacity:1; transform:none}}
+  @media (prefers-reduced-motion:reduce){.slide.active{animation:none; opacity:1; transform:none}}
+
+  .eyebrow{font-family:var(--fs-mono); font-size:.74rem; letter-spacing:.22em; text-transform:uppercase; color:var(--accent); margin:0 0 18px; display:flex; align-items:center; gap:12px}
+  .eyebrow::before{content:""; width:26px; height:1px; background:var(--accent); opacity:.7}
+
+  h1{font-size:clamp(2.1rem,5.4vw,4rem); line-height:1.02; margin:0; font-weight:700; letter-spacing:-.02em; text-wrap:balance}
+  h2{font-size:clamp(1.5rem,3.4vw,2.5rem); line-height:1.08; margin:0 0 .5em; font-weight:700; letter-spacing:-.015em; text-wrap:balance}
+  p{color:var(--ink-dim); line-height:1.6; margin:.5em 0; font-size:clamp(1rem,1.35vw,1.12rem); max-width:64ch}
+  strong{color:var(--ink); font-weight:600}
+  .lead{font-size:clamp(1.12rem,1.7vw,1.35rem); color:var(--ink-dim)}
+  .mono{font-family:var(--fs-mono)}
+
+  .title-meta{display:flex; gap:26px; flex-wrap:wrap; margin-top:34px; padding-top:26px; border-top:1px solid var(--line)}
+  .title-meta div{display:flex; flex-direction:column; gap:4px}
+  .title-meta .k{font-family:var(--fs-mono); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint)}
+  .title-meta .v{font-size:1.05rem; color:var(--ink)}
+  .title-meta .v.big{font-size:1.7rem; font-weight:700; color:var(--accent); font-family:var(--fs-mono); font-variant-numeric:tabular-nums}
+
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; margin-top:8px}
+  .stat{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px 20px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden}
+  .stat::after{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--accent)}
+  .stat.amber::after{background:var(--accent-2)} .stat.info::after{background:var(--info)}
+  .stat .figure{font-family:var(--fs-mono); font-variant-numeric:tabular-nums; font-size:clamp(1.7rem,3vw,2.4rem); font-weight:700; color:var(--ink); line-height:1}
+  .stat .cap{margin-top:10px; font-size:.86rem; color:var(--ink-dim); line-height:1.4}
+
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:26px; align-items:start}
+  @media (max-width:820px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px 24px; box-shadow:var(--shadow)}
+  ul.clean{list-style:none; padding:0; margin:14px 0 0; display:flex; flex-direction:column; gap:12px}
+  ul.clean li{padding-left:26px; position:relative; color:var(--ink-dim); line-height:1.5; font-size:1rem}
+  ul.clean li::before{content:""; position:absolute; left:2px; top:.55em; width:8px; height:8px; border-radius:2px; background:var(--accent); transform:rotate(45deg)}
+  ul.clean li b{color:var(--ink); font-weight:600}
+  ul.toil li::before{background:var(--bad); opacity:.75}
+
+  /* fan-out with batch */
+  .fan{display:grid; grid-template-columns:auto 1fr auto auto; align-items:center; gap:18px; margin-top:8px}
+  @media (max-width:820px){.fan{grid-template-columns:1fr}}
+  .node{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; box-shadow:var(--shadow)}
+  .node .lbl{font-weight:650; color:var(--ink); font-size:.98rem}
+  .node .sub{font-size:.8rem; color:var(--ink-faint); font-family:var(--fs-mono); margin-top:3px}
+  .reviewers{display:flex; flex-direction:column; gap:8px}
+  .rv{display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:9px 13px; font-size:.9rem; color:var(--ink-dim)}
+  .rv b{color:var(--ink); font-weight:600}
+  .rv .rid{font-family:var(--fs-mono); font-size:.72rem; color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line)); border-radius:5px; padding:1px 6px}
+  .fan .arrow{color:var(--ink-faint); font-family:var(--fs-mono); text-align:center}
+  @media (max-width:820px){.fan .arrow{transform:rotate(90deg); margin:2px 0}}
+
+  /* domain chip cloud */
+  .cloud{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px}
+  .dchip{background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 15px; font-size:.95rem; color:var(--ink); display:flex; align-items:center; gap:9px}
+  .dchip .dot{width:8px; height:8px; border-radius:50%; background:var(--accent)}
+  .dchip small{color:var(--ink-faint); font-family:var(--fs-mono); font-size:.78rem}
+
+  /* verdict sample cards */
+  .vsample{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:18px}
+  @media (max-width:760px){.vsample{grid-template-columns:1fr}}
+  .vc{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:15px 17px; position:relative; overflow:hidden}
+  .vc::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--accent)}
+  .vc.warnv::before{background:var(--warn)}
+  .vc .id{font-family:var(--fs-mono); font-weight:700; color:var(--ink)}
+  .vc .rec{font-size:.82rem; color:var(--ink-dim); margin-top:4px}
+  .vc .sev{font-family:var(--fs-mono); font-size:.76rem; color:var(--ink-faint); margin-top:8px}
+
+  .tablewrap{overflow-x:auto; margin-top:6px; border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow)}
+  table{border-collapse:collapse; width:100%; min-width:660px; background:var(--panel); font-size:.93rem}
+  thead th{font-family:var(--fs-mono); font-size:.66rem; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-faint); text-align:left; padding:14px 15px; border-bottom:1px solid var(--line); font-weight:600}
+  tbody td{padding:13px 15px; border-bottom:1px solid var(--line-soft); color:var(--ink-dim)}
+  tbody tr:last-child td{border-bottom:none}
+  td.n, th.n{text-align:right; font-variant-numeric:tabular-nums; font-family:var(--fs-mono); color:var(--ink)}
+  tr.flag td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  tr.idle td{color:var(--ink-faint)}
+  .tag{font-family:var(--fs-mono); font-size:.72rem; padding:2px 8px; border-radius:6px; border:1px solid var(--line); color:var(--ink-dim); white-space:nowrap}
+  .tag.star{color:var(--accent); border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+  .foot{font-size:.82rem; color:var(--ink-faint); margin-top:14px}
+
+  .bars{display:flex; flex-direction:column; gap:22px; margin-top:10px}
+  .bar-row .bl{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px}
+  .bar-row .bl .lab{font-size:.95rem; color:var(--ink)}
+  .bar-row .bl .val{font-family:var(--fs-mono); font-variant-numeric:tabular-nums; font-weight:700}
+  .track{height:26px; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; overflow:hidden}
+  .fill{height:100%; border-radius:7px 0 0 7px}
+  .fill.manual{background:linear-gradient(90deg,var(--bad),color-mix(in srgb,var(--bad) 60%,var(--accent-2)))}
+  .fill.agent{background:linear-gradient(90deg,var(--accent),var(--info))}
+  .est{font-family:var(--fs-mono); font-size:.72rem; color:var(--accent); letter-spacing:.08em; border:1px dashed color-mix(in srgb,var(--accent) 50%,var(--line)); padding:1px 7px; border-radius:5px}
+
+  .bgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:6px}
+  @media (max-width:900px){.bgrid{grid-template-columns:1fr 1fr}}
+  @media (max-width:600px){.bgrid{grid-template-columns:1fr}}
+  .benefit{background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:18px 20px}
+  .benefit .bt{display:flex; align-items:center; gap:10px; font-weight:650; color:var(--ink); font-size:1.02rem}
+  .benefit .bt span{font-family:var(--fs-mono); color:var(--accent); font-size:.9rem}
+  .benefit p{font-size:.9rem; margin:.5em 0 0; max-width:none}
+
+  .callout{border-left:3px solid var(--accent); background:var(--panel); padding:16px 22px; border-radius:0 12px 12px 0; margin-top:22px; box-shadow:var(--shadow)}
+  .callout p{margin:0; color:var(--ink); font-size:1.05rem}
+
+  .hud{position:fixed; top:20px; right:22px; z-index:20; display:flex; align-items:center; gap:14px; font-family:var(--fs-mono)}
+  .hud .count{font-size:.8rem; color:var(--ink-dim); font-variant-numeric:tabular-nums; letter-spacing:.05em}
+  .hud button{background:var(--panel); border:1px solid var(--line); color:var(--ink-dim); width:34px; height:34px; border-radius:9px; cursor:pointer; font-size:1rem; line-height:1; display:grid; place-items:center; transition:border-color .15s,color .15s}
+  .hud button:hover{color:var(--ink); border-color:var(--accent)}
+  .brand{position:fixed; top:22px; left:24px; z-index:20; font-family:var(--fs-mono); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint)}
+  .brand b{color:var(--ink)}
+
+  .nav{position:fixed; bottom:20px; left:0; right:0; z-index:20; display:flex; justify-content:center; align-items:center; gap:20px}
+  .dots{display:flex; gap:9px}
+  .dots button{width:9px; height:9px; border-radius:50%; border:none; background:var(--line); cursor:pointer; padding:0; transition:background .2s,transform .2s}
+  .dots button.on{background:var(--accent); transform:scale(1.35)}
+  .arrows{display:flex; gap:10px}
+  .arrows button{background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:10px; height:40px; padding:0 16px; cursor:pointer; font-family:var(--fs-sans); font-size:.9rem; display:flex; align-items:center; gap:8px; transition:border-color .15s}
+  .arrows button:hover:not(:disabled){border-color:var(--accent)}
+  .arrows button:disabled{opacity:.35; cursor:default}
+  .progress{position:fixed; top:0; left:0; height:2px; background:var(--accent); z-index:30; transition:width .4s cubic-bezier(.2,.7,.2,1)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:6px}
+
+  @media (max-width:560px){.title-meta{gap:18px} .stats{grid-template-columns:1fr 1fr} .brand{display:none}}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="brand"><b>GW-PRReview</b> · Gateway PR Reviewer</div>
+<div class="hud">
+  <span class="count"><span id="cur">1</span> / <span id="tot">8</span></span>
+  <button id="theme" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+</div>
+
+<div class="deck" id="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide active">
+    <p class="eyebrow">Internal case · Scheduled automation</p>
+    <h1>The whole gateway,<br>reviewed and always current.</h1>
+    <p class="lead" style="margin-top:22px">A read-only, scheduled job that runs a <strong>full semantic review</strong> of open PRs in <span class="mono">sis-externalapi</span> against the coding standards — five expert reviewers per PR — and keeps a <strong>self-contained HTML report</strong> for every one, refreshed six times a day.</p>
+    <div class="title-meta">
+      <div><span class="k">Reviewed so far</span><span class="v big">18 PRs</span></div>
+      <div><span class="k">Coverage</span><span class="v">8+ gateway domains · GET / PATCH / fix</span></div>
+      <div><span class="k">Per PR</span><span class="v big">~$3.3</span></div>
+      <div><span class="k">Backlog state</span><span class="v">drained — idle runs now cost $0</span></div>
+    </div>
+  </section>
+
+  <!-- 2 · PROBLEM -->
+  <section class="slide">
+    <p class="eyebrow">The problem · Why this matters</p>
+    <h2>The gateway ships fast. Review has to keep up.</h2>
+    <div class="cols">
+      <div>
+        <p>The External API gateway grows one GET endpoint at a time, across many domains — Email, CashRegister, ChildCare, Cafeteria, Calendar, Admissions. That's a steady stream of PRs, each needing a real review:</p>
+        <ul class="clean toil">
+          <li>Every PR competes for a <b>reviewer's scarce focused time</b></li>
+          <li>Volume makes it tempting to <b>skim or wave through</b> the routine ones</li>
+          <li>Standards adherence <b>drifts</b> across dozens of similar endpoints</li>
+          <li>A real issue in PR #12 is easy to miss when #13–#18 are also waiting</li>
+        </ul>
+      </div>
+      <div class="card">
+        <p style="margin-top:0"><strong>At this cadence, review is the constraint</strong> — not writing the endpoints.</p>
+        <p style="margin-bottom:0; color:var(--ink)"><strong>An always-on reviewer that never tires and never skims changes the throughput math.</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · METHOD -->
+  <section class="slide">
+    <p class="eyebrow">The method · Five reviewers, batched</p>
+    <h2>Every PR gets five specialists — many PRs at once.</h2>
+    <div class="fan">
+      <div class="node"><div class="lbl">Orchestrator</div><div class="sub">read-only · gh + git</div></div>
+      <div class="reviewers">
+        <div class="rv"><span class="rid">R1</span> <b>Architecture &amp; CQRS</b></div>
+        <div class="rv"><span class="rid">R2</span> <b>API Surface &amp; Security</b></div>
+        <div class="rv"><span class="rid">R3</span> <b>Contracts &amp; Data</b></div>
+        <div class="rv"><span class="rid">R4</span> <b>Runtime correctness + changelog</b></div>
+        <div class="rv"><span class="rid">R5</span> <b>Testing</b></div>
+      </div>
+      <div class="arrow">→<br>×N PRs</div>
+      <div class="node"><div class="lbl">Report per PR</div><div class="sub">findings + fix</div></div>
+    </div>
+    <div class="callout"><p>When several PRs are waiting, it reviews them <strong>in one run</strong> — a recent slot dispatched <strong>10 reviewers across 2 PRs</strong> in parallel. Each reviewer reads the whole changed files against its slice of the standard, not a regex over the diff.</p></div>
+  </section>
+
+  <!-- 4 · COVERAGE -->
+  <section class="slide">
+    <p class="eyebrow">The evidence · Cumulative coverage</p>
+    <h2>18 pull requests, reviewed across the gateway surface.</h2>
+    <div class="cloud">
+      <div class="dchip"><span class="dot"></span>Email <small>AutoEmailConfig · Auth</small></div>
+      <div class="dchip"><span class="dot"></span>CashRegister <small>Sessions · Vendor · Products</small></div>
+      <div class="dchip"><span class="dot"></span>ChildCare <small>DayCare</small></div>
+      <div class="dchip"><span class="dot"></span>Cafeteria <small>LunchOrders · Menus</small></div>
+      <div class="dchip"><span class="dot"></span>Calendar <small>ParentCommittee</small></div>
+      <div class="dchip"><span class="dot"></span>Lesson <small>LessonPlanDetails</small></div>
+      <div class="dchip"><span class="dot"></span>Admissions <small>OAAddress · OAAlumni</small></div>
+      <div class="dchip"><span class="dot"></span>People <small>PATCH / RFC-6902</small></div>
+    </div>
+    <p style="margin-top:18px">It doesn't just pass/fail — it gives a <strong>graded, actionable verdict</strong> per PR:</p>
+    <div class="vsample">
+      <div class="vc"><div class="id">PR #184</div><div class="rec">Approve</div><div class="sev">0E · 0W · 1 info</div></div>
+      <div class="vc warnv"><div class="id">PR #187</div><div class="rec">Approve with comments</div><div class="sev">0E · 1W · 1 info</div></div>
+      <div class="vc warnv"><div class="id">PR #192</div><div class="rec">Approve with comments</div><div class="sev">0E · 1W · 0 info</div></div>
+    </div>
+    <p class="foot">Source: 19 generated reports in the output folder (18 distinct PRs) + <span class="mono">gw-pr-review/logs/GW-PRReview/*.log</span>. Verdict thresholds: any error → reject; warnings → comments; clean → approve.</p>
+  </section>
+
+  <!-- 5 · THROUGHPUT -->
+  <section class="slide">
+    <p class="eyebrow">The payoff · Throughput</p>
+    <h2>~$3 and a few minutes buys a full five-lens review.</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Run</th><th>PRs reviewed</th><th class="n">Sub-agents</th><th class="n">Duration</th><th class="n">Cost</th></tr></thead>
+        <tbody>
+          <tr><td>Single</td><td>#187 · People PATCH</td><td class="n">5</td><td class="n">7.7 min</td><td class="n">$3.39</td></tr>
+          <tr class="flag"><td>Batched</td><td>#192 + #186 · Admissions</td><td class="n">10</td><td class="n">11.8 min</td><td class="n">$6.60</td></tr>
+          <tr class="idle"><td>Idle (backlog drained)</td><td>Nothing new — all have reports</td><td class="n">0</td><td class="n">~1–2 s</td><td class="n">$0.00</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="bars" style="margin-top:22px">
+      <div class="bar-row">
+        <div class="bl"><span class="lab">Careful manual review, per PR &nbsp;<span class="est">estimate</span></span><span class="val" style="color:var(--bad)">≈ 30–60 min focus</span></div>
+        <div class="track"><div class="fill manual" style="width:100%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bl"><span class="lab">Automated review, per PR (amortized) &nbsp;<span class="mono" style="color:var(--good);font-size:.72rem">measured</span></span><span class="val" style="color:var(--good)">~6–7 min · ~$3.3</span></div>
+        <div class="track"><div class="fill agent" style="width:18%"></div></div>
+      </div>
+    </div>
+    <p class="foot">Amortized from the two logged review runs (3 PRs, $9.99, ~19.5 min of orchestration). Batching means adding a PR barely adds wall-clock — the reviewers run in parallel.</p>
+  </section>
+
+  <!-- 6 · ALWAYS CURRENT / ECONOMICS -->
+  <section class="slide">
+    <p class="eyebrow">The economics · Always current, near-free</p>
+    <h2>Once the backlog is reviewed, staying current is free.</h2>
+    <div class="stats">
+      <div class="stat"><div class="figure">18</div><div class="cap">PRs reviewed to date — <strong>one report each</strong>, never re-reviewed (1 PR = 1 HTML).</div></div>
+      <div class="stat"><div class="figure">6×/day</div><div class="cap">A new PR gets its review within the next weekday slot.</div></div>
+      <div class="stat amber"><div class="figure">$0.00</div><div class="cap"><strong>~13 of 16</strong> recent runs — nothing new to review, so nothing spent.</div></div>
+      <div class="stat info"><div class="figure">~1 s</div><div class="cap">An idle run: a pre-check confirms all PRs have reports and exits.</div></div>
+    </div>
+    <div class="callout"><p>The idempotent design means the cost tracks the work exactly: <strong>you pay once per PR, and nothing to stay caught up.</strong> Delete a report to force a fresh review; otherwise it never spends twice.</p></div>
+  </section>
+
+  <!-- 7 · BENEFITS -->
+  <section class="slide">
+    <p class="eyebrow">Beyond speed · Why it's a real improvement</p>
+    <h2>Coverage at scale, without cutting corners.</h2>
+    <div class="bgrid">
+      <div class="benefit"><div class="bt"><span>//</span>Coverage at scale</div><p>Every eligible PR gets the same five-lens review — 18 done so far, no matter how busy the week was.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Batched throughput</div><p>Multiple PRs reviewed in one run with parallel sub-agents — volume doesn't create a queue.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Graded verdicts</div><p>Approve / approve-with-comments / reject with findings by severity, file, line, and suggested fix.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Consistency</div><p>The same standard applied identically across dozens of similar endpoints — no reviewer drift.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Strictly read-only</div><p>No comments, no approvals, working tree untouched. Findings post to GitHub only when <em>you</em> click.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Reviews teammates, not you</div><p>Auto-detects your login and reviews the roster minus yourself — everyone gets the same coverage, no setup.</p></div>
+    </div>
+  </section>
+
+  <!-- 8 · CLOSE -->
+  <section class="slide">
+    <p class="eyebrow">Recommendation</p>
+    <h1>Keep it running.<br>Let it hold the review baseline.</h1>
+    <p class="lead" style="margin-top:22px">The workflow has already given 18 gateway PRs a consistent, five-lens, standards-based review — and keeps every new one current for pennies. The team's review time goes to judgement calls, not to reading every routine endpoint cold.</p>
+    <div class="stats" style="margin-top:30px">
+      <div class="stat"><div class="figure">18</div><div class="cap">PRs reviewed across 8+ gateway domains.</div></div>
+      <div class="stat"><div class="figure">100%</div><div class="cap">Read-only — zero writes to any PR or the working tree.</div></div>
+      <div class="stat amber"><div class="figure">4</div><div class="cap">Jobs share this engine (GW + MS generators &amp; reviewers).</div></div>
+    </div>
+    <p style="margin-top:26px; color:var(--ink)"><strong>The ask:</strong> keep it as the standing first reviewer for every gateway PR, so no PR ever waits — or slips through — for lack of reviewer time.</p>
+  </section>
+
+</div>
+
+<div class="nav">
+  <div class="arrows"><button id="prev">← Prev</button></div>
+  <div class="dots" id="dots"></div>
+  <div class="arrows"><button id="next">Next →</button></div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const total=slides.length; let i=0;
+  const cur=document.getElementById('cur'), tot=document.getElementById('tot');
+  const prev=document.getElementById('prev'), next=document.getElementById('next');
+  const progress=document.getElementById('progress'), dotsWrap=document.getElementById('dots');
+  tot.textContent=total;
+
+  slides.forEach((_,n)=>{
+    const b=document.createElement('button'); b.setAttribute('aria-label','Go to slide '+(n+1));
+    b.addEventListener('click',()=>go(n)); dotsWrap.appendChild(b);
+  });
+  const dots=[...dotsWrap.children];
+
+  function go(n){
+    i=Math.max(0,Math.min(total-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    cur.textContent=i+1;
+    progress.style.width=((i)/(total-1)*100)+'%';
+    prev.disabled=i===0; next.disabled=i===total-1;
+  }
+  prev.addEventListener('click',()=>go(i-1));
+  next.addEventListener('click',()=>go(i+1));
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1)}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1)}
+    else if(e.key==='Home'){go(0)} else if(e.key==='End'){go(total-1)}
+  });
+
+  const root=document.documentElement, tbtn=document.getElementById('theme');
+  tbtn.addEventListener('click',()=>{
+    const dark=matchMedia('(prefers-color-scheme:dark)').matches;
+    const now=root.getAttribute('data-theme') || (dark?'dark':'light');
+    root.setAttribute('data-theme', now==='dark'?'light':'dark');
+  });
+
+  go(0);
+</script>
+</body>
+</html>

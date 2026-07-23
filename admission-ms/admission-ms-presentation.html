@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AdmissionMS Endpoint Generator — Time-Efficiency Case</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⏱️</text></svg>">
+<style>
+  :root{
+    --ground:#0d1320; --panel:#141d2e; --panel-2:#1b2740;
+    --ink:#eaf0fb; --ink-dim:#9fb0cc; --ink-faint:#6b7d9c;
+    --line:#26344d; --line-soft:#1b2436;
+    --accent:#f2b04a; --accent-2:#43c0b4;
+    --good:#5cc98f; --bad:#e8705f;
+    --shadow:0 24px 60px -30px rgba(0,0,0,.7);
+    --fs-mono:"Cascadia Code","Consolas",ui-monospace,"SFMono-Regular",monospace;
+    --fs-sans:"Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ground:#eaeef6; --panel:#ffffff; --panel-2:#f3f6fc;
+      --ink:#111a2b; --ink-dim:#4a5a74; --ink-faint:#8291a9;
+      --line:#d7e0ee; --line-soft:#e6ecf6;
+      --accent:#b8730c; --accent-2:#158577;
+      --good:#2e9e63; --bad:#c8503f;
+      --shadow:0 24px 60px -34px rgba(31,50,80,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0d1320; --panel:#141d2e; --panel-2:#1b2740;
+    --ink:#eaf0fb; --ink-dim:#9fb0cc; --ink-faint:#6b7d9c;
+    --line:#26344d; --line-soft:#1b2436;
+    --accent:#f2b04a; --accent-2:#43c0b4; --good:#5cc98f; --bad:#e8705f;
+    --shadow:0 24px 60px -30px rgba(0,0,0,.7);
+  }
+  :root[data-theme="light"]{
+    --ground:#eaeef6; --panel:#ffffff; --panel-2:#f3f6fc;
+    --ink:#111a2b; --ink-dim:#4a5a74; --ink-faint:#8291a9;
+    --line:#d7e0ee; --line-soft:#e6ecf6;
+    --accent:#b8730c; --accent-2:#158577; --good:#2e9e63; --bad:#c8503f;
+    --shadow:0 24px 60px -34px rgba(31,50,80,.35);
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--fs-sans); -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+  /* faint instrument grid on the ground */
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:
+      linear-gradient(var(--line-soft) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line-soft) 1px,transparent 1px);
+    background-size:64px 64px; opacity:.5;
+    mask-image:radial-gradient(ellipse 90% 80% at 50% 45%,#000 30%,transparent 90%);
+  }
+
+  /* ---- deck mechanics ---- */
+  .deck{position:relative; height:100%; z-index:1}
+  .slide{
+    position:absolute; inset:0; display:none;
+    padding:clamp(28px,5vw,84px);
+    flex-direction:column; justify-content:center;
+    max-width:1180px; margin:0 auto;
+    opacity:0; transform:translateY(14px);
+  }
+  .slide.active{display:flex; animation:rise .5s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes rise{to{opacity:1; transform:none}}
+  @media (prefers-reduced-motion:reduce){
+    .slide.active{animation:none; opacity:1; transform:none}
+  }
+
+  .eyebrow{
+    font-family:var(--fs-mono); font-size:.74rem; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--accent); margin:0 0 18px;
+    display:flex; align-items:center; gap:12px;
+  }
+  .eyebrow::before{content:""; width:26px; height:1px; background:var(--accent); opacity:.7}
+
+  h1{font-size:clamp(2.1rem,5.4vw,4rem); line-height:1.02; margin:0; font-weight:700; letter-spacing:-.02em; text-wrap:balance}
+  h2{font-size:clamp(1.5rem,3.4vw,2.5rem); line-height:1.08; margin:0 0 .5em; font-weight:700; letter-spacing:-.015em; text-wrap:balance}
+  p{color:var(--ink-dim); line-height:1.6; margin:.5em 0; font-size:clamp(1rem,1.35vw,1.12rem); max-width:64ch}
+  strong{color:var(--ink); font-weight:600}
+  .lead{font-size:clamp(1.12rem,1.7vw,1.35rem); color:var(--ink-dim)}
+  .mono{font-family:var(--fs-mono)}
+  .num{font-variant-numeric:tabular-nums; font-family:var(--fs-mono)}
+
+  /* ---- title ---- */
+  .title-meta{display:flex; gap:26px; flex-wrap:wrap; margin-top:34px; padding-top:26px; border-top:1px solid var(--line)}
+  .title-meta div{display:flex; flex-direction:column; gap:4px}
+  .title-meta .k{font-family:var(--fs-mono); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint)}
+  .title-meta .v{font-size:1.05rem; color:var(--ink)}
+  .title-meta .v.big{font-size:1.7rem; font-weight:700; color:var(--accent); font-family:var(--fs-mono); font-variant-numeric:tabular-nums}
+
+  /* ---- stat row ---- */
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; margin-top:8px}
+  .stat{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:20px 20px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden;
+  }
+  .stat::after{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--accent)}
+  .stat.teal::after{background:var(--accent-2)}
+  .stat.good::after{background:var(--good)}
+  .stat .figure{font-family:var(--fs-mono); font-variant-numeric:tabular-nums; font-size:clamp(1.7rem,3vw,2.4rem); font-weight:700; color:var(--ink); line-height:1}
+  .stat .unit{font-size:.9rem; color:var(--ink-faint); font-family:var(--fs-mono)}
+  .stat .cap{margin-top:10px; font-size:.86rem; color:var(--ink-dim); line-height:1.4}
+
+  /* ---- generic panels / lists ---- */
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:26px; align-items:start}
+  @media (max-width:820px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px 24px; box-shadow:var(--shadow)}
+  ul.clean{list-style:none; padding:0; margin:14px 0 0; display:flex; flex-direction:column; gap:12px}
+  ul.clean li{padding-left:26px; position:relative; color:var(--ink-dim); line-height:1.5; font-size:1rem}
+  ul.clean li::before{content:""; position:absolute; left:2px; top:.55em; width:8px; height:8px; border-radius:2px; background:var(--accent-2); transform:rotate(45deg)}
+  ul.clean li b{color:var(--ink); font-weight:600}
+  ul.toil li::before{background:var(--bad); opacity:.75}
+
+  /* ---- pipeline ---- */
+  .flow{display:flex; align-items:stretch; gap:0; flex-wrap:wrap; margin-top:10px}
+  .flow .step{flex:1; min-width:150px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; position:relative}
+  .flow .step .n{font-family:var(--fs-mono); font-size:.72rem; color:var(--accent); letter-spacing:.12em}
+  .flow .step h4{margin:.4em 0 .3em; font-size:1.02rem; color:var(--ink); font-weight:650}
+  .flow .step p{font-size:.86rem; margin:0; color:var(--ink-dim)}
+  .flow .arrow{display:flex; align-items:center; color:var(--ink-faint); padding:0 8px; font-family:var(--fs-mono)}
+  @media (max-width:820px){.flow .arrow{transform:rotate(90deg)}}
+
+  /* ---- telemetry table ---- */
+  .tablewrap{overflow-x:auto; margin-top:6px; border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow)}
+  table{border-collapse:collapse; width:100%; min-width:640px; background:var(--panel); font-size:.94rem}
+  thead th{
+    font-family:var(--fs-mono); font-size:.68rem; letter-spacing:.13em; text-transform:uppercase;
+    color:var(--ink-faint); text-align:left; padding:14px 16px; border-bottom:1px solid var(--line); font-weight:600;
+  }
+  tbody td{padding:13px 16px; border-bottom:1px solid var(--line-soft); color:var(--ink-dim)}
+  tbody tr:last-child td{border-bottom:none}
+  td.n, th.n{text-align:right; font-variant-numeric:tabular-nums; font-family:var(--fs-mono); color:var(--ink)}
+  tr.flag td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  tr.idle td{color:var(--ink-faint)}
+  .tag{font-family:var(--fs-mono); font-size:.72rem; padding:2px 8px; border-radius:6px; border:1px solid var(--line); color:var(--ink-dim); white-space:nowrap}
+  .tag.ok{color:var(--good); border-color:color-mix(in srgb,var(--good) 45%,var(--line))}
+  .tag.star{color:var(--accent); border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+  .foot{font-size:.82rem; color:var(--ink-faint); margin-top:14px}
+
+  /* ---- comparison bars ---- */
+  .bars{display:flex; flex-direction:column; gap:22px; margin-top:10px}
+  .bar-row .bl{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px}
+  .bar-row .bl .lab{font-size:.95rem; color:var(--ink)}
+  .bar-row .bl .val{font-family:var(--fs-mono); font-variant-numeric:tabular-nums; font-weight:700}
+  .track{height:26px; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; overflow:hidden; position:relative}
+  .fill{height:100%; border-radius:7px 0 0 7px; display:flex; align-items:center; transform-origin:left; }
+  .fill.manual{background:linear-gradient(90deg,var(--bad),color-mix(in srgb,var(--bad) 60%,var(--accent)))}
+  .fill.agent{background:linear-gradient(90deg,var(--accent-2),var(--good))}
+  .est{font-family:var(--fs-mono); font-size:.72rem; color:var(--accent); letter-spacing:.08em; border:1px dashed color-mix(in srgb,var(--accent) 50%,var(--line)); padding:1px 7px; border-radius:5px}
+
+  /* ---- benefit grid ---- */
+  .bgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:6px}
+  @media (max-width:900px){.bgrid{grid-template-columns:1fr 1fr}}
+  @media (max-width:600px){.bgrid{grid-template-columns:1fr}}
+  .benefit{background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:18px 20px}
+  .benefit .bt{display:flex; align-items:center; gap:10px; font-weight:650; color:var(--ink); font-size:1.02rem}
+  .benefit .bt span{font-family:var(--fs-mono); color:var(--accent-2); font-size:.9rem}
+  .benefit p{font-size:.9rem; margin:.5em 0 0; max-width:none}
+
+  .callout{border-left:3px solid var(--accent); background:var(--panel); padding:16px 22px; border-radius:0 12px 12px 0; margin-top:22px; box-shadow:var(--shadow)}
+  .callout p{margin:0; color:var(--ink); font-size:1.05rem}
+
+  /* ---- chrome ---- */
+  .hud{position:fixed; top:20px; right:22px; z-index:20; display:flex; align-items:center; gap:14px; font-family:var(--fs-mono)}
+  .hud .count{font-size:.8rem; color:var(--ink-dim); font-variant-numeric:tabular-nums; letter-spacing:.05em}
+  .hud button{
+    background:var(--panel); border:1px solid var(--line); color:var(--ink-dim);
+    width:34px; height:34px; border-radius:9px; cursor:pointer; font-size:1rem; line-height:1;
+    display:grid; place-items:center; transition:border-color .15s,color .15s;
+  }
+  .hud button:hover{color:var(--ink); border-color:var(--accent)}
+  .brand{position:fixed; top:22px; left:24px; z-index:20; font-family:var(--fs-mono); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint)}
+  .brand b{color:var(--ink)}
+
+  .nav{position:fixed; bottom:20px; left:0; right:0; z-index:20; display:flex; justify-content:center; align-items:center; gap:20px}
+  .dots{display:flex; gap:9px}
+  .dots button{width:9px; height:9px; border-radius:50%; border:none; background:var(--line); cursor:pointer; padding:0; transition:background .2s,transform .2s}
+  .dots button.on{background:var(--accent); transform:scale(1.35)}
+  .arrows{display:flex; gap:10px}
+  .arrows button{background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:10px; height:40px; padding:0 16px; cursor:pointer; font-family:var(--fs-sans); font-size:.9rem; display:flex; align-items:center; gap:8px; transition:border-color .15s}
+  .arrows button:hover:not(:disabled){border-color:var(--accent)}
+  .arrows button:disabled{opacity:.35; cursor:default}
+  .progress{position:fixed; top:0; left:0; height:2px; background:var(--accent); z-index:30; transition:width .4s cubic-bezier(.2,.7,.2,1)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:6px}
+
+  @media (max-width:560px){
+    .title-meta{gap:18px} .stats{grid-template-columns:1fr 1fr}
+    .brand{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="brand"><b>AdmissionMS</b> · Endpoint Generator</div>
+<div class="hud">
+  <span class="count"><span id="cur">1</span> / <span id="tot">8</span></span>
+  <button id="theme" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+</div>
+
+<div class="deck" id="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide active">
+    <p class="eyebrow">Internal case · Scheduled automation</p>
+    <h1>Shipping endpoints while<br>you work on something else.</h1>
+    <p class="lead" style="margin-top:22px">A scheduled, headless Claude Code job that generates <strong>full vertical-slice Admissions endpoints</strong> — controller, query, DTO, EF, and both test tiers — on a branch, left uncommitted for your review.</p>
+    <div class="title-meta">
+      <div><span class="k">Flagship run</span><span class="v big">33.7 min</span></div>
+      <div><span class="k">Delivered</span><span class="v">2 endpoints · 54 files · build green</span></div>
+      <div><span class="k">API cost</span><span class="v big">$12.19</span></div>
+      <div><span class="k">Developer time</span><span class="v">review only — it runs unattended</span></div>
+    </div>
+  </section>
+
+  <!-- 2 · THE PROBLEM -->
+  <section class="slide">
+    <p class="eyebrow">The problem · Why this matters</p>
+    <h2>One endpoint is a lot of careful, repetitive work.</h2>
+    <div class="cols">
+      <div>
+        <p>Every Admissions GET endpoint is a <strong>vertical slice</strong> built to the microservices architecture standard. Done by hand, each one is hours of pattern-matching before a single new idea is written:</p>
+        <ul class="clean toil">
+          <li>Find the latest reference PR and <b>reverse-engineer the full file set</b> it ships</li>
+          <li>Controller, <b>Query/Handler</b>, Sieve-projected DTO, EF entity + context wiring</li>
+          <li>Confirm columns against the <b>real SQL schema</b> — don't break production writers</li>
+          <li>Unit tests, <b>API integration tests</b>, fakers, helpers</li>
+          <li>Generate and approve <b>verified snapshots</b>, then drive the build to green</li>
+        </ul>
+      </div>
+      <div class="card">
+        <p style="margin-top:0"><strong>The tax:</strong> it's not the hard part of the job — it's the same shape every time. It's easy to skip the API-test tier under deadline, and the pattern drifts between developers.</p>
+        <p style="margin-bottom:0; color:var(--ink)"><strong>So the completeness and consistency depend on who had time that week.</strong></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · THE WORKFLOW -->
+  <section class="slide">
+    <p class="eyebrow">The workflow · What it does</p>
+    <h2>Read the sprint → generate the slice → hand it back.</h2>
+    <div class="flow">
+      <div class="step"><div class="n">01</div><h4>Detect</h4><p>Finds your <em>Active</em> Admissions story in the live sprint (ADO <span class="mono">@Me</span>). No story → exits in ~1s.</p></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">02</div><h4>Generate</h4><p>Mirrors the reference PR's file set on a fresh <span class="mono">story/&lt;id&gt;</span> branch — prod code + full test tier.</p></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">03</div><h4>Verify</h4><p>Builds the solution, runs unit + API tests, approves snapshots — until it's green.</p></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">04</div><h4>Hand back</h4><p>Leaves everything <strong>uncommitted</strong> for your IDE review. Never commits, pushes, or touches ADO.</p></div>
+    </div>
+    <div class="callout"><p>Runs <strong>6× a weekday, unattended</strong>. When there's no active story it never launches Claude — so an idle slot costs <strong class="mono">$0</strong>. It only spends when there's real work to do.</p></div>
+  </section>
+
+  <!-- 4 · EVIDENCE / TELEMETRY -->
+  <section class="slide">
+    <p class="eyebrow">The evidence · Measured from run logs</p>
+    <h2>Real telemetry, two real endpoints.</h2>
+    <p style="margin-top:-2px">Both endpoints — <span class="mono">OAAlumniField</span> and <span class="mono">OARequestInfo</span> (GET) — driven iteratively in reuse mode as scope grew from production-only to the full test tier.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Run</th><th>Scope delivered</th><th class="n">Files</th><th class="n">Duration</th><th class="n">Cost</th><th>Build</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>#1 · first pass</td><td>2 slices, production only</td><td class="n">8</td><td class="n">13.5 min</td><td class="n">$4.31</td><td><span class="tag ok">SUCCESS</span></td></tr>
+          <tr class="flag"><td>#2 · complete</td><td>2 slices + full test tier + 34 snapshots</td><td class="n">54</td><td class="n">33.7 min</td><td class="n">$12.19</td><td><span class="tag star">★ SUCCESS</span></td></tr>
+          <tr><td>#3 · refine</td><td>1 full / 1 scaffold</td><td class="n">47</td><td class="n">26.8 min</td><td class="n">$10.62</td><td><span class="tag ok">SUCCESS</span></td></tr>
+          <tr><td>#4 · refine</td><td>1 full / 1 scaffold</td><td class="n">45</td><td class="n">29.0 min</td><td class="n">$10.14</td><td><span class="tag ok">SUCCESS</span></td></tr>
+          <tr class="idle"><td>8 idle checks</td><td>No active story — Claude never launched</td><td class="n">0</td><td class="n">~1–2 s</td><td class="n">$0.00</td><td><span class="tag">skipped</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="foot">Source: <span class="mono">admission-ms/logs/AdmissionMS-EndpointGen/*.log</span> (2026-07-15 → 07-20). Every build ended <span class="mono">SUCCESS</span>; changes always left uncommitted.</p>
+  </section>
+
+  <!-- 5 · HEADLINE COMPARISON -->
+  <section class="slide">
+    <p class="eyebrow">The payoff · Elapsed build time</p>
+    <h2>Two complete endpoints in the time of a coffee break.</h2>
+    <div class="bars">
+      <div class="bar-row">
+        <div class="bl"><span class="lab">Hand-built to the same standard &nbsp;<span class="est">estimate</span></span><span class="val" style="color:var(--bad)">≈ 13–16 hrs</span></div>
+        <div class="track"><div class="fill manual" style="width:100%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bl"><span class="lab">Generator — unattended wall-clock &nbsp;<span class="mono" style="color:var(--good);font-size:.72rem">measured</span></span><span class="val" style="color:var(--good)">33.7 min</span></div>
+        <div class="track"><div class="fill agent" style="width:4%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bl"><span class="lab">Your hands-on time — review the diff &nbsp;<span class="mono" style="color:var(--accent-2);font-size:.72rem">estimate</span></span><span class="val" style="color:var(--accent-2)">≈ 30–60 min</span></div>
+        <div class="track"><div class="fill agent" style="width:7%"></div></div>
+      </div>
+    </div>
+    <p class="foot">Estimate basis: a full vertical-slice GET endpoint with unit + API integration tests and verified snapshots, hand-written to the microservices standard, ≈ 6–8 hrs for an experienced dev — two endpoints ≈ 1.5–2 days. Generator figures are measured (run #2). It works <strong>while you do something else</strong>; the only time it asks of you is the review.</p>
+  </section>
+
+  <!-- 6 · COST -->
+  <section class="slide">
+    <p class="eyebrow">The economics · What it costs to run</p>
+    <h2>The spend is a rounding error next to the time.</h2>
+    <div class="stats">
+      <div class="stat"><div class="figure">$12.19</div><div class="cap">API cost to deliver <strong>both endpoints complete</strong> (run #2).</div></div>
+      <div class="stat teal"><div class="figure">$0.00</div><div class="cap">Cost of an idle slot — <strong>8 of 12</strong> logged runs launched nothing.</div></div>
+      <div class="stat good"><div class="figure">~2%</div><div class="cap">Of the loaded labor cost of the dev-days it stands in for.<span class="est" style="margin-left:6px">estimate</span></div></div>
+      <div class="stat"><div class="figure">6×</div><div class="cap">Runs per weekday — it opportunistically drains the backlog.</div></div>
+    </div>
+    <div class="callout"><p>Because the schedule is <strong>free when idle and cheap when busy</strong>, there's no downside to leaving it running. It costs money only in exact proportion to the work it actually did.</p></div>
+  </section>
+
+  <!-- 7 · BENEFITS -->
+  <section class="slide">
+    <p class="eyebrow">Beyond speed · Why it's a real improvement</p>
+    <h2>Faster is the headline. Consistent and safe is the substance.</h2>
+    <div class="bgrid">
+      <div class="benefit"><div class="bt"><span>//</span>Consistency</div><p>Every slice mirrors the latest reference PR and the architecture standard — the pattern stops drifting between developers.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Full test tier by default</div><p>Unit <em>and</em> API integration tests with verified snapshots, generated every time — not the first thing cut under deadline.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Production-safe</div><p>An EF-safety gate checks columns against real SQL; <span class="mono">GENERATED ALWAYS</span> columns are mapped read-only so existing writers never break.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Human stays in control</div><p>Read-only on GitHub and ADO. Nothing is committed or pushed — you review the diff and decide.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Zero context-switch</div><p>It runs in the background on a schedule. The endpoint is waiting for you instead of interrupting your flow.</p></div>
+      <div class="benefit"><div class="bt"><span>//</span>Scales to the team</div><p>Auto-detects each dev via <span class="mono">@Me</span>, so everyone's own Active stories get scaffolded — no per-user setup.</p></div>
+    </div>
+  </section>
+
+  <!-- 8 · CLOSE -->
+  <section class="slide">
+    <p class="eyebrow">Recommendation</p>
+    <h1>Keep it running.<br>Point it at more of the backlog.</h1>
+    <p class="lead" style="margin-top:22px">The workflow already delivers complete, standards-compliant endpoints for the price of a review — proven on two real Admissions stories, green build every time.</p>
+    <div class="stats" style="margin-top:30px">
+      <div class="stat good"><div class="figure">≈ 95%</div><div class="cap">Less elapsed build time vs. hand-building.<span class="est" style="margin-left:6px">estimate</span></div></div>
+      <div class="stat"><div class="figure">100%</div><div class="cap">Green builds across every generation run logged.</div></div>
+      <div class="stat teal"><div class="figure">3</div><div class="cap">Sibling jobs already share this engine (GW, MS, PR-review).</div></div>
+    </div>
+    <p style="margin-top:26px; color:var(--ink)"><strong>The ask:</strong> adopt it across the team's Active sprint work, and treat the developer review — not the typing — as the job.</p>
+  </section>
+
+</div>
+
+<div class="nav">
+  <div class="arrows"><button id="prev">← Prev</button></div>
+  <div class="dots" id="dots"></div>
+  <div class="arrows"><button id="next">Next →</button></div>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const total=slides.length; let i=0;
+  const cur=document.getElementById('cur'), tot=document.getElementById('tot');
+  const prev=document.getElementById('prev'), next=document.getElementById('next');
+  const progress=document.getElementById('progress'), dotsWrap=document.getElementById('dots');
+  tot.textContent=total;
+
+  slides.forEach((_,n)=>{
+    const b=document.createElement('button'); b.setAttribute('aria-label','Go to slide '+(n+1));
+    b.addEventListener('click',()=>go(n)); dotsWrap.appendChild(b);
+  });
+  const dots=[...dotsWrap.children];
+
+  function go(n){
+    i=Math.max(0,Math.min(total-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    cur.textContent=i+1;
+    progress.style.width=((i)/(total-1)*100)+'%';
+    prev.disabled=i===0; next.disabled=i===total-1;
+  }
+  prev.addEventListener('click',()=>go(i-1));
+  next.addEventListener('click',()=>go(i+1));
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1)}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1)}
+    else if(e.key==='Home'){go(0)} else if(e.key==='End'){go(total-1)}
+  });
+
+  // theme toggle (respects OS default until clicked)
+  const root=document.documentElement, tbtn=document.getElementById('theme');
+  tbtn.addEventListener('click',()=>{
+    const dark=matchMedia('(prefers-color-scheme:dark)').matches;
+    const now=root.getAttribute('data-theme') || (dark?'dark':'light');
+    root.setAttribute('data-theme', now==='dark'?'light':'dark');
+  });
+
+  go(0);
+</script>
+</body>
+</html>
