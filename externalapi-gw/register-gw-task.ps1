@@ -52,8 +52,24 @@ if ($Unregister) {
 
 if (-not (Test-Path $WrapperPath)) { throw "Wrapper not found at $WrapperPath" }
 
-$pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
-if (-not $pwshPath) { throw "pwsh (PowerShell 7+) not found on PATH." }
+# Resolve a STABLE pwsh.exe. Do NOT use (Get-Command pwsh).Source directly: for the
+# Microsoft Store build that resolves to a version-stamped WindowsApps path
+# (…\Microsoft.PowerShell_7.6.3.0_x64…\pwsh.exe) which the Store DELETES on every auto-update,
+# leaving the scheduled task pointing at a missing file (fails with 0x80070002). Prefer paths
+# that survive updates: the MSI install, then the unversioned WindowsApps execution alias.
+$pwshCandidates = @(
+    "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe')
+)
+$pwshPath = $pwshCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $pwshPath) {
+    # Last resort: whatever's on PATH (may be a volatile versioned Store path).
+    $pwshPath = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+}
+if (-not $pwshPath) { throw "pwsh (PowerShell 7+) not found." }
+if ($pwshPath -like '*\WindowsApps\Microsoft.PowerShell_*') {
+    Write-Warning "Resolved a version-stamped Store path ($pwshPath); this breaks on the next PowerShell update. Install the PowerShell 7 MSI for a stable path."
+}
 
 # Action ---------------------------------------------------------------------
 $arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$WrapperPath`" -TaskName $TaskName"
