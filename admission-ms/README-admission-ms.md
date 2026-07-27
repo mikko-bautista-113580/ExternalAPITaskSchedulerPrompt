@@ -24,6 +24,7 @@ It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, th
 | `run-admission-ms.ps1` | Wrapper. Loads creds, resolves the current sprint, finds Active Admissions stories, guards a clean working tree, launches Claude headless, reports the branch/diff, rotates logs. |
 | `admission-ms-prompt.md` | The prompt Claude follows: analyze story → branch → generate → build (no commit). |
 | `register-admission-ms-task.ps1` | Creates/removes the `AdmissionMS-EndpointGen` scheduled task (Mon–Fri 07:00). |
+| `reference/facts-sis-schema-tables.md` | FACTS SIS **table catalog** (~670 KB) — every documented table with columns, PK, **FK targets**, triggers, plus per-group "Key FK targets" cross-reference summaries. Used to resolve *which table an entity joins to in order to reach `ConfigSchoolID`*. Grep-only (too big to read whole). |
 | `logs/AdmissionMS-EndpointGen/` | Per-run logs (last 30 kept). |
 
 ## How it decides what to build
@@ -122,6 +123,8 @@ pwsh -File ...\register-admission-ms-task.ps1 -Unregister
   (the team roster minus you, from `team-roster.json`), looked up via `gh pr list`
   and matched to the story's operation type. Its file list is the **completeness checklist** — it is
   what guarantees the generator ships the full test surface, not just the production files.
+- **Database shape:** the story's `sis-sql-schema` link (live DDL, authoritative) backed by the local
+  `reference/facts-sis-schema-tables.md` catalog for FK/join lookups the story doesn't link.
 - Exemplar slices copied for shape (fallback if `gh` is unavailable): `Features/OAEmergencyPickupField/`
   & `Features/OAAddressField/` (GET/list, incl. their full API-test tier) and `Features/OARequestInfoTrack/`
   (upsert/command).
@@ -147,6 +150,16 @@ title/description. (The 2026-07-15 run fetched only Description + Acceptance Cri
   entirely** (property + projection + Sieve) rather than shipped as a placeholder-`0` filterable field
   that would silently break filters; the omission is flagged loudly and the story marked `scaffold`
   pending a design decision (a defined `memberid -> ConfigSchool` mapping).
+- **The join path is looked up, not guessed** — `reference/facts-sis-schema-tables.md` (see *Files*) is
+  the schema catalog the prompt greps to answer *"which table does this entity join to for
+  `ConfigSchoolID`?"*. `dbo.ConfigSchool` is the tenancy root (PK `SchoolCode`, surrogate
+  `ConfigSchoolID smallint`), so a valid path is any **real, single-valued** FK chain landing on it —
+  canonically `dbo.<OA*Field> --onlineappid--> dbo.OA --SchoolCode--> dbo.ConfigSchool`. The prompt's
+  join-path ladder walks the chain hop by hop, rejects one-to-many/ambiguous hops, confirms against the
+  story's live `sis-sql-schema` link (which wins over the snapshot), and only then permits either the
+  projection or the omission. The resolved path (or `NONE (omitted)`) is logged in each story's analysis
+  line. This is what separates a proven omission (`dbo.OARequestInfo`: PK `requestid`, only `memberid`,
+  and `dbo.OAMember` has no `ConfigSchool` link at all) from a missed navigation.
 - **Canonical 15 GET test scenarios** — `BasicRetrieval`, `Filter`, `AscendingSort`, `DescendingSort`,
   `Pagination`, `FilteredDataNotExist`, `EmptyDatabase`, `NullableFields`, and the six `ConfigSchool*` /
   `FilteredData*ConfigSchoolQuery*` cases.
