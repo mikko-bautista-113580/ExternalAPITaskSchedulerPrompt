@@ -45,7 +45,7 @@ Every folder follows the same shape:
 | `run-*.ps1` | Wrapper: preflight (auth / clean tree), launches `claude` headless on the prompt, streams events to a timestamped log, verifies invariants. |
 | `*-prompt.md` | The instructions Claude follows — the actual engine of the job. |
 | `register-*-task.ps1` | Creates/removes the Windows scheduled task and its triggers. |
-| `logs/<TaskName>/` | Per-run logs (last 30 kept). Grep `===` for the milestone view. |
+| `logs/<TaskName>/` | Per-run logs (last 30 kept). Grep `===` for the milestone view. Also holds the post-run `*.review.md` process reports (see below). |
 | `*-standards.md`, `*-template.html` | (PR reviewers) the coding-standards rulebook and the JSON-driven HTML report shell. |
 
 ## Prerequisites
@@ -95,6 +95,29 @@ pwsh -File .\<job>\register-<job>-task.ps1 -Unregister
 
 Wrappers default to the `opus` model (best for semantic work); pass `-Model sonnet` for
 cheaper/faster runs.
+
+## Post-run process review
+
+Every job ends by reviewing **its own run**. After the wrapper writes `=== … run finished …`,
+it calls the shared `Invoke-LogReview` (`lib/log-review.ps1`), which launches a second headless
+`claude` (opus) on `lib/log-review-prompt.md`. That reviewer reads the run's log, finds where the
+**automation process** (wrappers / prompts / standards) can be improved — timeouts, Windows/Unix
+path mismatches, wasted rebuild cycles, `WARN`/`FATAL` lines, etc. — **validates** each fix against
+the current source, and writes a markdown report next to the log
+(`logs/<TaskName>/<TaskName>_<timestamp>.review.md`, git-ignored, last 30 kept).
+
+- **It never commits.** Validated fixes are applied as **uncommitted** edits to this repo's own
+  files (`*.ps1`, `*-prompt.md`, `*-standards.md`, `*-template.html`); you review `git diff` and
+  commit. It never runs `git add`/`commit`/`push` and never touches the target repos.
+- **It never stacks unreviewed edits.** If the automation tree already has pending changes, the
+  reviewer degrades to **report-only** (recommends, changes nothing) so edits can't compound
+  across back-to-back scheduled runs.
+- **Validity is enforced twice:** the reviewer parse-checks any `.ps1` it edits, and the wrapper
+  parse-gates the result — a changed script that doesn't parse is automatically reverted, so a
+  broken script can never reach the next run.
+- **Clean no-op runs are skipped** (no claude launched, exit 0, no warnings) to avoid cost.
+- **New shared files:** `lib/log-review.ps1` (the `Invoke-LogReview` function) and
+  `lib/log-review-prompt.md` (the reviewer engine) — dot-sourced by every wrapper, no per-job code.
 
 ## Safety guarantees
 

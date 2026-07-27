@@ -36,3 +36,14 @@ pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1
 Get-ScheduledTask -TaskName 'GW-MorningAutoPR-0700' | Get-ScheduledTaskInfo
 Start-ScheduledTask -TaskName 'GW-MorningAutoPR-0700'   # run now
 ```
+
+## Post-run process review
+
+After each run finishes, the wrapper calls the shared `Invoke-LogReview` (`..\lib\log-review.ps1`),
+which runs a second headless `claude` (opus) on `..\lib\log-review-prompt.md` to review **this run's
+log** for process improvements (timeouts, path mismatches, wasted cycles, `WARN`/`FATAL` lines, prompt
+issues). It writes a report next to the log (`logs\<TaskName>\<TaskName>_<timestamp>.review.md`) and,
+when the automation tree is clean, applies **validated, uncommitted** fixes to this repo's own files
+for you to review with `git diff` and commit. It never commits/pushes, never edits the target repo,
+degrades to report-only if edits are already pending, and reverts any edited `.ps1` that fails to
+parse. See the repo-root `README.md` → "Post-run process review".

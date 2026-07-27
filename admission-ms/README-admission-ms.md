@@ -187,3 +187,14 @@ service — the prompt now spells out this local approve loop and marks a unit-o
 | `ABORT: working tree is dirty` | Review/commit/stash your changes (incl. a prior run's output), then re-run. |
 | `Branch ... REUSING it` / `... UNIQUE branch` | Expected: the desired branch existed, so it was reused (safe) or a unique `-N` branch was made. Delete the local branch first if you want a clean regen under the original name. |
 | `BUILD: FAIL` in the log | Story was ambiguous or code needs manual finishing — branch kept with `// TODO(AB#..)` markers. |
+
+## Post-run process review
+
+After each run finishes, the wrapper calls the shared `Invoke-LogReview` (`..\lib\log-review.ps1`),
+which runs a second headless `claude` (opus) on `..\lib\log-review-prompt.md` to review **this run's
+log** for process improvements (timeouts, path mismatches, wasted cycles, `WARN`/`FATAL` lines, prompt
+issues). It writes a report next to the log (`logs\<TaskName>\<TaskName>_<timestamp>.review.md`) and,
+when the automation tree is clean, applies **validated, uncommitted** fixes to this repo's own files
+for you to review with `git diff` and commit. It never commits/pushes, never edits the target repo,
+degrades to report-only if edits are already pending, and reverts any edited `.ps1` that fails to
+parse. See the repo-root `README.md` → "Post-run process review".

@@ -349,4 +349,9 @@ Get-ChildItem $TaskLogDir -Filter "${TaskName}_*.log" |
     Select-Object -Skip 30 |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
+# --- post-run process-improvement review (report + uncommitted patches; never commits) ---
+. "$ScheduledDir\..\lib\log-review.ps1"
+Invoke-LogReview -LogFile $LogFile -TaskName $TaskName -ScheduledDir $ScheduledDir `
+    -TargetRepo $RepoRoot -ClaudeCmd $ClaudeCmd -ExitCode $exitCode
+
 exit $exitCode
