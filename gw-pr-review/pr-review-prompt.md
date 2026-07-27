@@ -118,16 +118,22 @@ A Gateway GET endpoint is a thin wrapper over a domain microservice's **client l
    ~/.nuget/packages/sis.{domain}.service.client/{X.Y.Z}/lib/net8.0/{Domain}.Service.Client.dll
    ```
    (lower-case package folder; the sibling `{Domain}.Service.Client.xml` doc file sits next to it.)
-4. **Decompile the referenced types.** Prefer `ilspycmd`; provision it best-effort if absent:
+
+   **Gate before steps 4–5 — the target version must be cached.** If neither the DLL nor the XML doc exists for **that exact version** (common when the PR bumped the client and a read-only review never restores it), stop here and go straight to step 6. Specifically, do NOT:
+   - substitute a **different cached version** of the same package — a DTO or property added in the bumped version cannot exist in an older assembly, so decompiling it proves nothing;
+   - run `dotnet tool install --global ilspycmd` — it reliably fails in this locked-down environment (`DotnetToolSettings.xml was not found in the package`). One `ilspycmd --version` probe is fine; an install attempt is not.
+
+   Then prefer reconstructing the DTO's field set from **the PR's own unit tests** when they enumerate the fields (e.g. a mapper or serialization test that constructs the DTO) — that is a sanctioned fallback, at explicitly reduced confidence. Note it as fidelity level `test-inferred` for R3.
+4. **Decompile the referenced types** (only if the target version's DLL is cached). Use `ilspycmd` if it is already on PATH:
    ```
-   ilspycmd --version 2>$null; if ($LASTEXITCODE -ne 0) { dotnet tool install --global ilspycmd 2>&1 | Out-Null }
+   ilspycmd --version 2>$null   # probe only -- do NOT attempt `dotnet tool install`
    ilspycmd "<dll path>" -t {Domain}.Service.Client.{Resource}Dto
    ```
    Run `-t` once per DTO type you need (the `{Resource}Dto` plus any nested DTO types it references). Capture the decompiled class text (property names, types, nullability, `[JsonProperty]` names).
-5. **Fallback when `ilspycmd` cannot be installed** (offline / locked-down scheduled env — `dotnet tool install` fails): read the sibling **`{Domain}.Service.Client.xml`** doc file (always present, no tool needed) and extract the `<member name="P:...">` summaries for the DTO. Log `WARN: ilspycmd unavailable — upstream DTO fidelity reduced to XML-doc summaries (names/descriptions only, no types/nullability)` so the user knows the mapping check was partial.
-6. **If neither is available** (DLL not restored AND no xml doc — e.g. the package was never restored locally): log `WARN: upstream {Domain}.Service.Client {version} not found in NuGet cache — R3 Output↔DTO mapping check skipped` and proceed without it. Do NOT fail the PR on this alone.
+5. **Fallback when `ilspycmd` is unavailable** (offline / locked-down scheduled env): read the **target version's** sibling `{Domain}.Service.Client.xml` doc file (no tool needed) and extract the `<member name="P:...">` summaries for the DTO. Log `WARN: ilspycmd unavailable — upstream DTO fidelity reduced to XML-doc summaries (names/descriptions only, no types/nullability)` so the user knows the mapping check was partial.
+6. **If the target version isn't cached at all** (no DLL AND no xml doc for that version — e.g. the PR bumped to a version never restored locally): log `WARN: upstream {Domain}.Service.Client {version} not found in NuGet cache — R3 Output↔DTO mapping check skipped` (add `— DTO shape inferred from PR unit tests instead` if you reconstructed it that way) and proceed without it. Do NOT fail the PR on this alone.
 
-Cache the decompiled/parsed DTO text in memory — you will inline it into **R3**'s brief in Phase 2. Note the fidelity level (full decompile vs xml-doc-only vs skipped) so R3 calibrates its confidence.
+Cache the decompiled/parsed DTO text in memory — you will inline it into **R3**'s brief in Phase 2. Note the fidelity level (full decompile vs xml-doc-only vs test-inferred vs skipped) so R3 calibrates its confidence.
 
 ### Phase 2 — Fan out five dimension reviewers IN PARALLEL
 

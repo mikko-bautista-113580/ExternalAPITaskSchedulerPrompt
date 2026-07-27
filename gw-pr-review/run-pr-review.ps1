@@ -269,6 +269,8 @@ try {
                 Write-Log "[claude:DONE] subtype=$($ev.subtype) duration=$($ev.duration_ms)ms cost=`$$($ev.total_cost_usd)"
                 Write-Log "[claude:final] $r"
             }
+            # benign informational events -- logged plainly, no "(no formatter)" noise
+            'rate_limit_event' { Write-Log "[claude:info] rate_limit_event" }
             default { Write-Log "[claude:event:$($ev.type)] (no formatter)" }
         }
     }
