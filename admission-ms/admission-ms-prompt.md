@@ -2,20 +2,21 @@ You are running as a Windows scheduled task. Your job is to **generate a new HTT
 
 ## Autonomy override (explicit user authorization)
 
-The user has **explicitly authorized this scheduled task** to create a local branch, write code into `Services.Admissions`, and run `dotnet build` — autonomously, with no interactive approval. That authorization covers exactly those local actions and nothing else. Committing, pushing, PRs, remote mutation, and ADO writes all remain prohibited (the user commits).
+The user has **explicitly authorized this scheduled task** to create a local branch, write code into `Services.Admissions`, run `dotnet build`, and — as the **one** narrow exception to the ADO read-only rule — **associate the generated API/integration tests to their existing ADO test cases** (Step 5), autonomously, with no interactive approval. That authorization covers exactly those actions and nothing else. Committing, pushing, PRs, remote mutation, and every *other* ADO write remain prohibited (the user commits).
 
 ## Hard prohibitions (the run FAILS if you do any of these)
 
 - ❌ NO `git commit`, `git add` for the purpose of committing, `git stash`, or `git push`. Leave generated files as **uncommitted** working-tree changes on the story branch.
 - ❌ NO `gh pr create` or any `gh pr` **write** (edit/comment/merge/close/review), NO creating/updating remote branches. (Read-only `gh pr list` / `gh pr view` / `gh api` GETs are ALLOWED and expected — that's how you look up the reference PR.)
-- ❌ NO Azure DevOps writes of any kind (no work-item edits, comments, or state changes). ADO is **read-only** — you only *read* story detail.
+- ❌ NO Azure DevOps writes to the delivery project (`{ADO_PROJECT}`): no story/Feature/task edits, no comments, no state changes. Story data is **read-only** — you only *read* story detail.
+  - ✅ **Single carve-out:** Step 5 may PATCH the **automation fields of existing Test Case work items** in the **`Test Case Global Repo`** project (`AutomatedTestName`, `AutomatedTestStorage`, `AutomatedTestId`, `AutomationStatus`, `System.State`) via the association script. That is the only ADO write permitted. It **creates no work items**, touches no story, and must never run against a `000` placeholder id.
 - ❌ NO changes to any service other than **`Services.Admissions`**. Stay strictly inside `src/Services.Admissions/`.
 - ❌ NO editing files on `main` or the user's original branch — all your writes happen on the new `story/...` branch after you check it out.
 
 ## Execution environment
 
 - Working dir: `{{REPO_ROOT}}`. The wrapper has verified the working tree is **clean**, fetched `origin`, and confirmed the target branch does not yet exist (idempotency) before launching you.
-- **ADO access (read-only):** credentials live in `{{ENV_FILE}}` (`ADO_PAT`, `ADO_ORG`, `ADO_PROJECT`). Read story detail via the REST API using the PAT as HTTP Basic auth (`Authorization: Basic base64(":$ADO_PAT")`). Prefer PowerShell `Invoke-RestMethod`. `az boards work-item show --id <id>` also works if an `az` session is present; REST is the reliable path.
+- **ADO access (read-only):** credentials live in `{{ENV_FILE}}` (`ADO_PAT`, `ADO_ORG`, `ADO_PROJECT`). Read story detail via the REST API using the PAT as HTTP Basic auth (`Authorization: Basic base64(":$ADO_PAT")`). Prefer PowerShell `Invoke-RestMethod`. `az boards work-item show --id <id>` also works if an `az` session is present; REST is the reliable path. **You are on Windows** — fetch with `Invoke-RestMethod`, and if you must stage JSON to disk, write it under `$env:TEMP` (e.g. `Join-Path $env:TEMP 'story_<id>.json'`). Do **NOT** shell out to `curl` writing to Unix `/tmp/...` paths — `/tmp` does not exist here, so the follow-up read fails with `FileNotFoundError` and wastes a round-trip.
 - **The wrapper appends a "Runtime inputs" block to the end of this prompt** with the exact ADO org/project, current sprint, target branch name, and the list of Active Admissions stories. **That block is authoritative for this run** — use those IDs and that exact branch name.
 
 ## Reference material — READ THESE FIRST (they define the required shape)
@@ -71,7 +72,7 @@ The **`Microsoft.VSTS.TCM.SystemInfo`** field ("Technical Requirements (System I
 - **ViewModels** — the **complete DTO field list with types and nullability**. This is the DTO contract: include **every listed property, exactly as named/typed**, and nothing extra. If the schema truly cannot yield a listed field, do NOT silently drop it: keep it in the DTO, leave a `// TODO(AB#<id>)`, and call it out in the summary.
   - **`ConfigSchoolId` is DTO-ONLY — NEVER an EF Model column.** When ViewModels lists `ConfigSchoolId [short] NOT NULL`, it is a required DTO property, but you must **never add a `ConfigSchoolId` column/property to the EF entity**. Instead project it through the entity's existing tenancy **navigation chain**, null-safe, mirroring the reference PR — e.g. `ConfigSchoolId = e.OA != null && e.OA.ConfigSchool != null ? e.OA.ConfigSchool.ConfigSchoolID : (short)0`. Only add a `ConfigSchool`/`OA` navigation to the EF model if the entity already has the FK to hang it on (e.g. `SchoolCode`/`OnlineAppId`), per the EF-safety gate. **Find the chain with the join-path ladder below** (schema catalog, reference #5) — don't guess it.
   - **If no navigation path to `ConfigSchool` exists at all → OMIT `ConfigSchoolId` entirely; do NOT ship a placeholder.** When the entity has no way to derive it (e.g. keyed only by `memberid`, with no FK/nav to `ConfigSchool` and no unambiguous single-row bridge), do **not** emit `ConfigSchoolId = (short)0` or any constant, and do **not** leave a filterable `ConfigSchoolId` property on the DTO — a Sieve-filterable field hard-wired to `0` silently breaks every `ConfigSchoolId==…` filter (returns wrong/empty results). Instead **remove the `ConfigSchoolId` property, its projection line, and any Sieve attribute** from the DTO, and make the omission LOUD (this is not "silently dropping"): leave a `// NOTE(AB#<id>): ConfigSchoolId omitted — no ConfigSchool navigation …` in the DTO, call it out prominently in the run summary, and mark the story `scaffold` (not `full`) pending a design decision (a defined `memberid -> ConfigSchool` mapping). Verify the join before deciding it's absent — run the **join-path ladder** below against `reference\facts-sis-schema-tables.md` (check for a real, single-valued FK/navigation: `SchoolCode`, an `OA`/member entity that itself links to `ConfigSchool`); only omit when the ladder proves there is genuinely none. **This overrides the general "keep it + TODO" rule above for `ConfigSchoolId` specifically** — for a filterable tenancy field, a truthful omission beats a misleading placeholder. (Real example: `dbo.OARequestInfo` is keyed by `requestid` with only `memberid`; `OAMember` has no `ConfigSchool` link and the `memberid -> OA -> ConfigSchool` bridge is one-to-many/ambiguous → `ConfigSchoolId` was omitted, not zero-filled.)
-- **Schema** — the `sis-sql-schema` link (e.g. `dbo.OARequestInfo.sql`). This is the real table definition; use it (read-only, e.g. via `gh api` or the raw URL) to confirm columns, keys, nullability, and any temporal/tenancy columns before writing the EF mapping. Never contradict it.
+- **Schema** — the `sis-sql-schema` link (e.g. `dbo.OARequestInfo.sql`). This is the real table definition; use it (read-only, e.g. via `gh api` or the raw URL) to confirm columns, keys, nullability, and any temporal/tenancy columns before writing the EF mapping. Never contradict it. When fetching a schema file with `gh api .../contents/<path>`, target the repo's **default branch** — omit `?ref=` (or pass `?ref=main`). Do **NOT** guess a `beta`/feature ref: it 404s (`No commit found for the ref beta`) and burns a retry before you fall back to `main`.
 - **Business Rules/Logic**, **Validators**, **Endpoint Search**, and **MS Feature (Analysis/Recommendation)** — honor filters/rules stated here (e.g. "filter for specific school via sieve"), the validator requirements, and the confirmation that no implementation exists yet.
 
 ### 🔗 Resolving the `ConfigSchoolId` join path — REQUIRED procedure before you project it OR omit it
@@ -209,12 +210,69 @@ Every non-excluded line of the code you generate for a feature must be exercised
     /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Include="[Admissions.Service]*<Feature>*"
   ```
   (If the repo already wires `coverlet.runsettings` or `--collect:"XPlat Code Coverage"`, use that path instead — discover it before inventing flags. Inspect the emitted `coverage.cobertura.xml` for `line-rate` **and** `branch-rate` on each generated class; both must be `1` / 100%.)
+  - **Shell-safety for the `/p:Include` glob:** the `*`/`[` characters in `/p:Include="[Admissions.Service]*<Feature>*"` get glob-expanded/mangled if the shell sees them unquoted — an unquoted `*` surfaces as `MSB1008: Only one project can be specified` and wastes several retries. Run this from **PowerShell as a single line** (no `\` continuation), or if you use the Bash tool, single-quote the whole property (`'/p:Include=[Admissions.Service]*<Feature>*'`). **Simplest robust path:** collect coverage **without** `/p:Include`, then parse the emitted cobertura for just your generated `Handler`/`Validator`/`Projection` classes by name — this avoids the glob entirely (it is what the 2026-07-29 run fell back to after the filter failed).
 - **How to reach 100%:** the canonical 15 GET scenarios (or the reduced set when `ConfigSchoolId` is omitted) plus the command validator tests are designed to cover the standard shape — if a line or branch is still uncovered, it means a real branch has no test. **Add the missing scenario** (e.g. the null-safe nav fallback in the `Projection`, an empty-result path, each validator rule's pass/fail). Do NOT paper over a gap by deleting code, over-excluding with `[ExcludeFromCodeCoverage]`, or writing an assertion-free test that merely executes a line — the added test must assert meaningful behavior.
 - **If 100% is genuinely unreachable** for a specific branch (e.g. a defensive guard that no seedable input can trigger), do not silently fall short: leave a `// TODO(AB#<id>): <branch> uncovered — <why>` at that spot, report the exact class + line + achieved percentages in the final summary, and mark the story `scaffold` (not `full`). A slice below 100% coverage without a logged, justified exception is a run defect.
 
 Emit the exact marker `BUILD: SUCCESS` or `BUILD: FAIL` (the wrapper greps for it). If the build cannot be made green after reasonable effort, keep the branch, leave a clear `// TODO(AB#<id>)` at the unresolved spot, log the errors, and emit `BUILD: FAIL` — do not delete work.
 
-## Step 5 — Leave the changes UNCOMMITTED for the user to review
+## Step 5 — Associate the API/integration tests to their ADO test cases
+
+Once a feature's tests are **green** (Step 4), link each API/integration test method back to the ADO Test Case it implements, so the Test Case flips to `Automated` and points at the real method. This is the **only** ADO write this run performs (see the carve-out in Hard prohibitions) and it **updates existing test cases only — it never creates one**.
+
+### 5.1 Gate — decide whether to run at all (skip cleanly, never fail the run)
+
+Run the association for a feature **only if all four hold**. If any fails, **log a WARN, skip that feature, and continue** — a skipped association is never a run failure and never blocks Step 6:
+
+1. **Real test-case IDs exist.** The file has at least one `[TestCaseId("NNNNNN")]` with a **real numeric id**. ⚠️ **`[TestCaseId("000")]` is a placeholder — NEVER associate it.** The script PATCHes `.../wit/workitems/000`, which 404s and inflates the failure count for no reason. If **every** id in a file is `000`, skip the file entirely and log `ASSOCIATE SKIPPED (<Feature>): all TestCaseIds are 000 placeholders`.
+2. **The feature's tests passed.** Never associate a red or unbuilt test — a Test Case marked `Automated` that points at a failing method is worse than one left `Design`. If `BUILD: FAIL`, or the feature's `dotnet test` is not green, skip and log why.
+3. **`az` is authenticated.** Check `az account show --query user.name -o tsv`. ⚠️ **You are a non-interactive scheduled task — do NOT run `az login`** (the reference workflow does, because it is interactive; you are not). It would block on a browser prompt until the task times out. If the check fails or returns empty, skip **all** associations and log `ASSOCIATE SKIPPED: az not authenticated — run 'az login --scope 499b84ac-1321-427f-aa17-267ca6975798/.default' and re-associate manually`.
+4. **The story is `full`, not `scaffold`.** A scaffold's methods may still be renamed by the user; associating them would write a stale `AutomatedTestName`.
+
+### 5.2 Resolve the association script (stable path — do NOT hardcode a version)
+
+The script is `associate-test-script.ps1` (a.k.a. `AssociateTestScript.ps1`). It does **not** live in `{{REPO_ROOT}}`. Resolve it with this ladder and use the **first** candidate that exists — the same stability rule the task registrars follow for `pwsh.exe`:
+
+```powershell
+$assocCandidates = @(
+    # Guard the env var: bare `Join-Path $env:CLAUDE_PLUGIN_ROOT ...` THROWS when it is unset,
+    # which aborts the whole array literal and silently resolves NOTHING. Verified 2026-07-29.
+    if ($env:CLAUDE_PLUGIN_ROOT) { Join-Path $env:CLAUDE_PLUGIN_ROOT 'resources\scripts\associate-test-scripts-to-testcases\associate-test-script.ps1' }
+    # Newest installed plugin version wins (no [version] cast — a non-semver folder name would throw).
+    Get-ChildItem "$env:USERPROFILE\.claude\plugins\cache\sis-pdlc-marketplace\sis-pdlc-plugin\*\resources\scripts\associate-test-scripts-to-testcases\associate-test-script.ps1" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -ExpandProperty FullName
+    "$env:USERPROFILE\repos\sis-externalapi\.windsurf\workflows\Development\AssociateTests\AssociateTestScript.ps1"
+    'C:\neldevsrc\Github\sis-externalapi\.windsurf\workflows\Development\AssociateTests\AssociateTestScript.ps1'
+)
+$assocScript = $assocCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+```
+
+⚠️ **Never hardcode a version-stamped path** like `...\sis-pdlc-plugin\1.2.11\...` — the plugin cache is rewritten on every update and the pinned path silently disappears (the same failure mode that broke the Store `pwsh.exe` path). `$env:CLAUDE_PLUGIN_ROOT` may be unset in a scheduled context; that is exactly why the glob fallback exists. If **no** candidate resolves, log `ASSOCIATE SKIPPED: associate-test-script.ps1 not found` and continue to Step 6 — do **not** hand-roll the PATCH calls yourself.
+
+### 5.3 Run it — one invocation per API test file
+
+Associate the **API/integration tier only** (`Admissions.Tests/ApiTests/Features/<Feature>/Queries/Get<Feature>QueryV1Tests.cs`). Unit tests under `Admissions.Tests/Features/` carry no real `[TestCaseId]` and are **not** associated.
+
+```powershell
+& $assocScript -FilePath '<ABSOLUTE path to the ApiTests .cs file>' -Mode 'associate' -Org 'renweb' -Project 'Test Case Global Repo'
+```
+
+- **`-FilePath` MUST be a full absolute path** starting with the drive letter (e.g. `C:\...\src\Services.Admissions\Admissions.Tests\ApiTests\Features\OAAlumniField\Queries\GetOAAlumniFieldQueryV1Tests.cs`). The script calls `Resolve-Path` and derives the namespace + class from the file — a relative path or a wrong file makes it exit 1 with *"Some variables … are blank"*.
+- **`-Project` is `Test Case Global Repo`** (test cases live there), **not** `{ADO_PROJECT}`. The space-bearing name is URL-encoded by the script; keep the quotes.
+- **Run it once per file and WAIT for it to finish. Do NOT re-run it** — each run assigns a **fresh `AutomatedTestId` GUID**, so a needless re-run churns the work item for no benefit.
+- The script derives `AutomatedTestStorage` from the path (`Services.Admissions` → `Admissions.Tests.dll`) and `AutomatedTestName` as `<namespace>.<class>.<method>` — nothing to pass in. It only matches methods declared `public async Task …` / `public void …` directly after the `[TestCaseId]` attribute; if a method is missed, that is a real mismatch worth logging, not something to work around.
+
+### 5.4 Report
+
+Capture the script's `=== SUMMARY ===` block (total `[TestCaseId]` attributes found, successful, failed) and emit one marker per feature:
+
+```
+ASSOCIATE <Feature>: <n> cases — <s> succeeded, <f> failed (<skipped> placeholders skipped)
+```
+
+Failures here are **non-fatal**: log them, keep the generated code, and surface them under "Assumptions / TODOs" so the user can re-associate manually. Never retry a failed association more than once.
+
+## Step 6 — Leave the changes UNCOMMITTED for the user to review
 
 Do **NOT** commit. Leave all generated files as **uncommitted working-tree changes on the `story/...` branch** so the user reviews the diff and commits it themselves. Do **not** `git add`, `git commit`, `git stash`, or `git push`. Just ensure every generated file is saved on disk while you are checked out on the branch. Stay on this branch — the wrapper leaves it checked out so the user finds the changes ready to review.
 
@@ -227,7 +285,8 @@ If a story lacks enough detail to implement a correct endpoint (unknown entity/t
 1. Ensure you are still on the `story/...` branch and your generated files are present as **uncommitted** changes (`git status --short`). Do not switch branches — the wrapper leaves the repo here for the user.
 2. Emit one marker per story: `STORY <id> GENERATED: <Feature> — <full|scaffold> — <files count> files`. **`full` REQUIRES both test tiers AND 100% line + branch coverage** (unit under `Admissions.Tests/Features/` AND the API tier under `Admissions.Tests/ApiTests/Features/` with approved `*.verified.txt`, plus the coverage gate in Step 4 met at 100% line and 100% branch on the feature's non-`[ExcludeFromCodeCoverage]` classes). A slice with unit tests only, or one below 100% coverage without a logged justified exception, is NOT `full` — mark it `scaffold` and list the missing API-tier files and/or uncovered lines/branches in the summary. Log the achieved line% and branch% per feature. Include an approximate file count comparable to the reference PR (a GET feature is ~25+ files with the API tier + snapshots, not ~4).
 3. Emit the build marker exactly once: `BUILD: SUCCESS` or `BUILD: FAIL`.
-4. Print a final summary in this format, then exit 0:
+4. Emit one association marker per feature (Step 5): `ASSOCIATE <Feature>: <n> cases — <s> succeeded, <f> failed (<skipped> placeholders skipped)`, or `ASSOCIATE SKIPPED (<Feature>): <reason>` when the Step 5.1 gate blocked it. A skip is **informational, not a failure** — it must not change the story's `full`/`scaffold` verdict or the build marker.
+5. Print a final summary in this format, then exit 0:
 
 ```
 ENDPOINT GEN RUN COMPLETE (<ISO timestamp>)
@@ -236,12 +295,17 @@ Branch:  <targetBranch>  (changes left UNCOMMITTED for review)
 Stories: <n>   Generated: <full m / scaffold s>   Build: <SUCCESS|FAIL>
   - #<id> <Feature>: <full|scaffold>  (<verb>, <files> files)
   - ...
+Test-case association (ADO 'Test Case Global Repo'):
+  - <Feature>: <s>/<n> associated  |  SKIPPED — <reason>
+  - ...
 Assumptions / TODOs for the user to review:
   - <anything you guessed or stubbed>
 
 Next steps for the user (after reviewing the diff):
   - To commit + push:  git add <files>; git commit -m "..."; git push -u origin HEAD
                        (use `git push -u origin HEAD` — this branch has no upstream yet; a plain `git push` may fail)
+  - To re-associate any SKIPPED/failed test cases:  run /sis-pdlc-plugin:p2-associate-testscript
+                       (or the Step 5 command directly, after `az login`)
 ```
 
 - Log every step with an ISO timestamp (`Get-Date`; do not guess the time).

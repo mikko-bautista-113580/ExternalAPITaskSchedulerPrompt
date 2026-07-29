@@ -9,8 +9,8 @@ review the diff and commit it yourself.
 It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, this one deliberately
 **creates a branch and writes code**. It is **LOCAL-ONLY**:
 
-> ✅ create local branch · write code · `dotnet build`
-> ❌ never commit · never `git push` · never open a PR · never write to Azure DevOps
+> ✅ create local branch · write code · `dotnet build` · associate API tests to their ADO test cases
+> ❌ never commit · never `git push` · never open a PR · never write to a story/Feature work item
 
 > **Per-MS by design.** This folder is the Admissions instance. To add a generator for another
 > microservice, copy the whole folder (e.g. to `people-ms`) and change the small **PER-MS CONFIG**
@@ -22,7 +22,7 @@ It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, th
 | File | Purpose |
 |---|---|
 | `run-admission-ms.ps1` | Wrapper. Loads creds, resolves the current sprint, finds Active Admissions stories, guards a clean working tree, launches Claude headless, reports the branch/diff, rotates logs. |
-| `admission-ms-prompt.md` | The prompt Claude follows: analyze story → branch → generate → build (no commit). |
+| `admission-ms-prompt.md` | The prompt Claude follows: analyze story → branch → generate → build → associate test cases (no commit). |
 | `register-admission-ms-task.ps1` | Creates/removes the `AdmissionMS-EndpointGen` scheduled task (Mon–Fri 07:00). |
 | `reference/facts-sis-schema-tables.md` | FACTS SIS **table catalog** (~670 KB) — every documented table with columns, PK, **FK targets**, triggers, plus per-group "Key FK targets" cross-reference summaries. Used to resolve *which table an entity joins to in order to reach `ConfigSchoolID`*. Grep-only (too big to read whole). |
 | `logs/AdmissionMS-EndpointGen/` | Per-run logs (last 30 kept). |
@@ -57,8 +57,16 @@ It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, th
    ADO_ORG=renweb
    ADO_PROJECT=ColdFusion
    ```
-   (Same file used by the `shared-ado-connect` skill. Only *read* scope is needed — this job never writes to ADO.)
+   (Same file used by the `shared-ado-connect` skill. **`Work Items: Read` is still all the PAT needs** —
+   the one ADO write, Step 5's test-case association, authenticates separately via `az account get-access-token`,
+   not the PAT.)
 2. **Claude CLI** — installed at `%APPDATA%\npm\claude.cmd`.
+   **`az` login (optional).** Step 5 associates the generated API tests to their ADO test cases and needs a
+   valid `az` session; the task is non-interactive and will **never** prompt for login. If no session exists
+   the association is skipped with a logged reason and everything else still runs. To enable it, log in once:
+   ```powershell
+   az login --scope 499b84ac-1321-427f-aa17-267ca6975798/.default
+   ```
 3. **Register the task** (elevated pwsh):
    ```powershell
    pwsh -File C:\neldevsrc\Github\TaskScheduler\admission-ms\register-admission-ms-task.ps1
@@ -88,6 +96,11 @@ pwsh -File ...\register-admission-ms-task.ps1 -Unregister
   Get-ChildItem "C:\neldevsrc\Github\TaskScheduler\admission-ms\logs\AdmissionMS-EndpointGen" |
     Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait $_.FullName }
   ```
+- **Test-case association:** grep the log for `ASSOCIATE` — one line per feature, either
+  `ASSOCIATE <Feature>: <n> cases — <s> succeeded, <f> failed (...)` or
+  `ASSOCIATE SKIPPED (<Feature>): <reason>`. A skip is expected and harmless when the tests carry only
+  `[TestCaseId("000")]` placeholders or `az` isn't logged in. To do it yourself afterwards, run
+  `/sis-pdlc-plugin:p2-associate-testscript` on the API test file.
 - **The work:** left **uncommitted** on the `story/...` branch in `c:\neldevsrc\Github\sis-services`,
   which the run leaves checked out. Review and commit yourself:
   ```powershell
@@ -108,7 +121,12 @@ pwsh -File ...\register-admission-ms-task.ps1 -Unregister
 - **Reuse-or-unique branch** — a re-run for a story set whose branch already exists will *reuse* that
   branch when it's safe (no divergence from `origin/main`), or create a unique `story/<ids>-N` branch
   when reusing would conflict. Either way an existing branch is never reset or clobbered.
-- **No commit / no remote / no ADO mutation** — nothing is committed, pushed, or written to a work item.
+- **No commit / no remote / no story mutation** — nothing is committed, pushed, or written to a story,
+  Feature, or task. The **one** ADO write is Step 5's test-case association: it PATCHes only the
+  *automation fields* (`AutomatedTestName`/`Storage`/`Id`, `AutomationStatus`, `State`) of **existing**
+  Test Cases in the `Test Case Global Repo` project. It creates no work items, is skipped entirely for
+  `[TestCaseId("000")]` placeholders, for red tests, for `scaffold` stories, and when `az` isn't
+  authenticated — and a skip is logged, never a run failure.
 - **Strict EF-safety gate** — `EFModel/*` and `AdmissionsContext` map to the shared production DB, so
   the prompt forbids guessed/breaking schema changes: prefer zero EF edits, additive-and-non-breaking
   only, must reflect the real schema, must still build green, and every EF touch is reported in the
