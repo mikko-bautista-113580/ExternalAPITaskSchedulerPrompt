@@ -202,6 +202,36 @@ produced fully locally: run the tests → Verify emits `*.received.txt` → appr
 re-run green. (A 2026-07-15 run generated unit tests only, wrongly assuming snapshots need a live
 service — the prompt now spells out this local approve loop and marks a unit-only slice as incomplete.)
 
+### A snapshot cannot witness a scrubbed field — assertions are mandatory
+
+Non-deterministic members (identity PKs, timestamps, `NextPage`, and `ConfigSchoolId`) are **scrubbed**
+before `Verifier.Verify`, so they render as `{Scrubbed}`. That means a filter/sort/tenancy test which
+asserts only the status code plus the snapshot **would still pass if the filter were ignored entirely**.
+The prompt now carries a per-scenario assertion table (e.g. `ZeroConfigSchoolQuery` must assert
+`AllSatisfy(x => x.ConfigSchoolId.Should().Be(0))`), warns that `AllSatisfy` passes vacuously on an
+empty collection so it must be paired with `NotBeEmpty()`, derives the scrub list from the data instead
+of a hardcoded list, and logs a `SCRUB-ASSERT CHECK` per scrubbed member — a `MISSING` blocks the `full`
+verdict. (Raised in review of PR #3123 against two generated ApiTest files.)
+
+### Reduced scenario sets are legitimate — when justified in code and in the summary
+
+A feature ships fewer than the canonical 15 scenarios when its schema can't support them: no
+`ConfigSchoolId` path drops cases 9–15, and no nullable DTO fields drops case 8. That is correct rather
+than under-coverage **only if** the reason is recorded both as an in-code `// NOTE(AB#<id>)` and in the
+run summary (`SCENARIOS: <Feature> — <k> of 15 (<reason>)`). Review of PR #3123 accepted
+`OAStandardReportingType`'s 9 of 15 precisely because the in-code NOTE explained it.
+
+### Conventions the prompt pins
+
+- **File-scoped namespaces in every new file** (`namespace X;`, not a braced block). New files will
+  differ from older block-scoped exemplars; that divergence is intentional and pre-existing files are
+  not reformatted. (Raised in review of PR #3123 on a new `EFModel/` entity.)
+- **Composite PKs are recorded, not "fixed."** When a table's PK is composite with no surrogate `Id`
+  (e.g. `OAFormCompleted` = `FormSchoolID` + `studentid`), the generator reports the PK shape in the
+  summary and never invents an `Id`. Pagination checkers that key overlap on a single `Id` report a
+  false overlap on such tables — hand-verification on PR #3123 showed real overlap of 0, so the prompt
+  explicitly forbids adding a tie-break to satisfy a mis-keyed checker.
+
 ## Tuning
 
 - **Schedule:** edit `-Times` in `register-admission-ms-task.ps1` (default `@('07:00')`) and re-register.

@@ -111,7 +111,15 @@ From the System Info (falling back to title/description/AC only where a section 
 
 Ensure the ADO fetch includes `Custom.TestingConsiderations` and `$expand=relations` so these are available. Enforce a **1:1** mapping (one real id per method, no duplicates) and log, per story, which ids were real vs `000`. (For reference: the current OAAlumniField/OARequestInfo stories have no TestingConsiderations link and no TestedBy relations → all `000`.)
 
-Log a one-line analysis summary per story before coding — include the resolved controller/route/query names, the DTO field count from ViewModels, the **resolved `ConfigSchoolId` join path** (e.g. `OAAlumniField -> OA -> ConfigSchool`, or `NONE (omitted)`), and whether test-case IDs were found (real vs `000`).
+Log a one-line analysis summary per story before coding — include the resolved controller/route/query names, the DTO field count from ViewModels, the **resolved `ConfigSchoolId` join path** (e.g. `OAAlumniField -> OA -> ConfigSchool`, or `NONE (omitted)`), the **PK shape** (see below), and whether test-case IDs were found (real vs `000`).
+
+### 🔑 Composite primary keys — record them, don't "fix" them
+Note the entity's PK shape while reading the schema catalog. When the table's PK is **composite with no surrogate `Id`** (real example: `dbo.OAFormCompleted` = `FormSchoolID` + `studentid`), two things follow:
+
+1. **Never invent a surrogate `Id`** to make the DTO or a snapshot tidier — the absence is the real schema, and the story documents it.
+2. **Say so explicitly in the run summary** (e.g. `PK: composite (FormSchoolID + studentid) — no surrogate Id`). Automated pagination checks that detect page overlap by keying on a single `Id` column will report a **false** overlap for these entities (they pick a non-unique column, and repeated identical values in the "overlap" list are the tell for a tie, not a genuine overlap). Review of PR #3123 hand-verified the full composite key and found overlap of exactly 0 — the pagination was correct and the tool was wrong. Flagging the PK shape up front saves the next reviewer from re-investigating it.
+
+⚠️ **Do NOT add a tie-break, a synthetic key, or any other change to the paged query to "resolve" this.** Pagination via Sieve's `GetPagedAsync` is already correct; deviating from the reference PR's shape to satisfy a mis-keyed checker would be a genuine regression.
 
 ## Step 2 — Get onto the target branch (create fresh, or reuse the existing one)
 
@@ -161,6 +169,18 @@ Follow the modern vertical-slice convention (the exemplars are your template). F
 
 **Do NOT** add manual DI registrations — MediatR and FluentValidation are auto-scanned from `Admissions.Service`. Thread `CancellationToken` everywhere. No `.Result`/`.Wait()`/`async void`/empty catch. Match naming exactly (feature = domain noun, `Get<Feature>Query`, nested `Handler`, `<Command>Validator`, `<Feature>Dto`).
 
+**File-scoped namespaces in every NEW file.** Declare the namespace with a semicolon, not a braced block — it removes a level of indentation from the whole file:
+
+```csharp
+namespace Admissions.Accessors.EFModel;   // ✅ new files
+
+namespace Admissions.Accessors.EFModel    // ❌ do not generate this shape
+{
+}
+```
+
+This applies to **all** generated files (controllers, queries/commands, DTOs, EF entities, tests), and was raised in review of PR #3123 against a newly-generated `EFModel/` entity. Like the `internal sealed class Handler` rule above, **expect your new files to differ from the older exemplars** — many pre-existing files are block-scoped. That divergence is intentional: do **not** convert a new file back to block-scoped to match a neighbor, and do **not** reformat pre-existing files (that would balloon the diff).
+
 ### Tests — BOTH tiers are REQUIRED (the reference PR ships both; a unit-only slice is INCOMPLETE)
 Mirror the reference PR's test files exactly. A GET endpoint is **not done** until the API/integration tier exists and passes. The two tiers:
 
@@ -168,12 +188,46 @@ Mirror the reference PR's test files exactly. A GET endpoint is **not done** unt
 - **API / integration (REQUIRED)** under `Admissions.Tests/ApiTests/Features/<Feature>/`. This tier is NOT optional and NOT "build-only-exempt" — it runs entirely against an **in-memory host** (`: ApiTestParallelizable`, `HttpClientBuilder.GetClient(Client)` → `TestsHelper.Act<PagedResult<<Feature>DtoTm>>(...)`), so it is fully reproducible locally with no live service. It comprises, per feature (copy the reference PR's set):
   - `ApiTests/Features/<Feature>/Queries/Get<Feature>QueryV1Tests.cs` — the **canonical 15 GET scenarios** (the team standard, matching the OAEmergencyPickupField/OAAddressField exemplars), method-named `Get<Feature>_<Scenario>_200`:
     1. `BasicRetrieval` · 2. `Filter` · 3. `AscendingSort` · 4. `DescendingSort` · 5. `Pagination` · 6. `FilteredDataNotExist` · 7. `EmptyDatabase` (no seed) · 8. `NullableFields` (`allowNulls: true`) · 9. `ConfigSchoolQueryExist` · 10. `NegativeConfigSchoolQuery` (`==-1`) · 11. `ZeroConfigSchoolQuery` (`==0`) · 12. `ConfigSchoolQueryGreaterThanZero` (`>0`) · 13. `ConfigSchoolQueryDoesNotExist` (`==short.MaxValue`) · 14. `FilteredDataExistsInConfigSchoolQuery` · 15. `FilteredDataDoesNotExistInConfigSchoolQuery` (`==int.MaxValue`).
-    Ascending/descending sort cases cover each sortable field (one `[TestCaseId]`/`TestName` per field, as the exemplar does). Assertions + `await Verifier.Verify(responseDto, _verifySettings)`; scrub non-deterministic members (`Id`, `ConfigSchoolId`, `NextPage`, plus any auto-num/timestamp) via `GetVerifierSettings()` / `ScrubMember(s)` exactly like the exemplar. Generate only the scenarios the story's schema supports — if an entity has no `ConfigSchoolId` path, `ConfigSchoolId` is omitted from the DTO (see the ViewModels rule), so the six `ConfigSchool*`/`FilteredData*ConfigSchoolQuery*` cases (9–15) cannot be produced: **skip them**, don't fake snapshots, and note the reduced count in the summary.
+    Ascending/descending sort cases cover each sortable field (one `[TestCaseId]`/`TestName` per field, as the exemplar does). **Every scenario also needs explicit assertions — see the scrub/assert rule below; `Verifier.Verify` alone is not enough.**
   - `ApiTests/Features/<Feature>/Shared/<Feature>DtoTm.cs` — the API-test response model.
   - `ApiTests/Helpers/<Feature>Helper.cs` — the seeder (`GenerateAsync(...)`, seeds a `ConfigSchool` + rows).
   - `ApiTests/Shared/Faker/<Feature>EndpointFakerV1.cs` — the Bogus faker, deterministic via `UseSeed(ApiTestConstants.BogusFakerSeedId)`.
   - The committed `*.verified.txt` snapshots — **one per test case** (see below).
   - `[TestCaseId("NNNNNN")]`: take the id from the story's **Testing Considerations** / System Info test-suite link (see Step 1). If none is linked for a scenario, use `[TestCaseId("000")]` — never invent a plausible real ID.
+
+##### 🚨 A scrubbed member is INVISIBLE to the snapshot — assert it explicitly or the test proves nothing
+This is the #1 defect found in review of the generated PR #3123, and it is caused by following the "just Verify()" shortcut. `ConfigSchoolId` is **scrubbed**, so a test named `ZeroConfigSchoolQuery_200` that asserts only the status code plus `await Verifier.Verify(...)` **would still pass if the filter were ignored entirely** — the snapshot renders the field as `{Scrubbed}` and witnesses nothing. Reviewer's words: *"nothing here actually confirms the returned rows have `ConfigSchoolId == 0`."*
+
+**The rule: if the scenario NAME encodes a predicate (a filter, a sort, or a tenancy scope), the test MUST assert that predicate explicitly with FluentAssertions, in addition to `Verifier.Verify`.** `Verify` alone is sufficient only for shape-only scenarios (`BasicRetrieval`, `NullableFields`). Required per scenario:
+
+| Scenario | Required explicit assertion (on top of status code + `Verify`) |
+|---|---|
+| 2 `Filter` | `Results.Should().NotBeEmpty();` + `AllSatisfy(x => x.<FilteredField>.Should().Be(<seeded>))` |
+| 3 / 4 `AscendingSort` / `DescendingSort` | `Results.Should().BeInAscendingOrder(x => x.<Field>)` / `BeInDescendingOrder(...)` — per sort param, inside the `switch` on the sort field |
+| 5 `Pagination` | page-size + `NextPage` assertions (scrub `NextPage` to `"{Scrubbed}"` before `Verify`) |
+| 6 `FilteredDataNotExist` · 7 `EmptyDatabase` · 10 `NegativeConfigSchoolQuery` · 13 `ConfigSchoolQueryDoesNotExist` · 15 `FilteredDataDoesNotExistInConfigSchoolQuery` | `Results.Should().BeEmpty();` |
+| 9 `ConfigSchoolQueryExist` | `NotBeEmpty();` + `AllSatisfy(x => x.ConfigSchoolId.Should().Be(testData.ConfigSchool.ConfigSchoolID))` |
+| 11 `ZeroConfigSchoolQuery` | `AllSatisfy(x => x.ConfigSchoolId.Should().Be(0))` |
+| 12 `ConfigSchoolQueryGreaterThanZero` | `NotBeEmpty();` + `AllSatisfy(x => x.ConfigSchoolId.Should().BeGreaterThan(0))` |
+| 14 `FilteredDataExistsInConfigSchoolQuery` | `NotBeEmpty();` + `AllSatisfy` on **both** `ConfigSchoolId` **and** the filtered field |
+
+⚠️ **`AllSatisfy` passes VACUOUSLY on an empty collection.** Always pair it with `Results.Should().NotBeEmpty();` for any scenario that is supposed to return rows — otherwise the new assertion is exactly as hollow as the snapshot it was meant to replace.
+
+**Derive the scrub list from the data — do NOT copy a fixed list.** Scrub exactly the members whose values are non-deterministic under the Bogus seed: identity/auto-number PKs, timestamps, and `NextPage`. Do not assume an `Id` exists (`OAFormCompleted` has none — its PK is composite) and do not assume `ConfigSchoolId` is the only tenancy field. The real PR scrubbed `StudentId`, `FormSchoolId`, and `ConfigSchoolId` — every one of which is a field some scenario is named after, which is precisely why the explicit assertions above are mandatory.
+
+**Self-check before the feature counts as `full`** (same spirit as the EF/file-set checks): for each member you passed to `ScrubMembers`, confirm at least one explicit assertion in that test file references it. Log one line per member:
+
+```
+SCRUB-ASSERT CHECK: <Feature> — <member>: OK | MISSING
+```
+
+A `MISSING` is a real gap — add the assertion and re-run. Do not mark the story `full` while any member is `MISSING`.
+
+##### Generating only the scenarios the schema supports
+Generate only the scenarios the story's schema supports, and **justify every omission in two places** — an in-code `// NOTE(AB#<id>): <scenario(s)> omitted — <why>` and the run summary — so a reviewer reads it as a deliberate decision, not under-coverage:
+- **No `ConfigSchoolId` path** → the DTO omits `ConfigSchoolId` (see the ViewModels rule), so cases **9–15** cannot be produced: skip them, don't fake snapshots.
+- **No nullable DTO fields** → case **8 `NullableFields`** has nothing to exercise: skip it.
+- State the resulting count in the summary, e.g. `9 of 15 scenarios — ref table: no ConfigSchool set (9–15), no nullable fields (8)`. (Real example: `OAStandardReportingType` legitimately shipped 9 of 15 and review confirmed that was correct, *because* the in-code `NOTE(AB#256357)` explained it.)
 
 #### Producing the `*.verified.txt` snapshots locally (this is what the earlier run wrongly skipped)
 Verify snapshots are generated by RUNNING the API tests, not hand-written, and not dependent on any external service:
@@ -211,7 +265,7 @@ Every non-excluded line of the code you generate for a feature must be exercised
   ```
   (If the repo already wires `coverlet.runsettings` or `--collect:"XPlat Code Coverage"`, use that path instead — discover it before inventing flags. Inspect the emitted `coverage.cobertura.xml` for `line-rate` **and** `branch-rate` on each generated class; both must be `1` / 100%.)
   - **Shell-safety for the `/p:Include` glob:** the `*`/`[` characters in `/p:Include="[Admissions.Service]*<Feature>*"` get glob-expanded/mangled if the shell sees them unquoted — an unquoted `*` surfaces as `MSB1008: Only one project can be specified` and wastes several retries. Run this from **PowerShell as a single line** (no `\` continuation), or if you use the Bash tool, single-quote the whole property (`'/p:Include=[Admissions.Service]*<Feature>*'`). **Simplest robust path:** collect coverage **without** `/p:Include`, then parse the emitted cobertura for just your generated `Handler`/`Validator`/`Projection` classes by name — this avoids the glob entirely (it is what the 2026-07-29 run fell back to after the filter failed).
-- **How to reach 100%:** the canonical 15 GET scenarios (or the reduced set when `ConfigSchoolId` is omitted) plus the command validator tests are designed to cover the standard shape — if a line or branch is still uncovered, it means a real branch has no test. **Add the missing scenario** (e.g. the null-safe nav fallback in the `Projection`, an empty-result path, each validator rule's pass/fail). Do NOT paper over a gap by deleting code, over-excluding with `[ExcludeFromCodeCoverage]`, or writing an assertion-free test that merely executes a line — the added test must assert meaningful behavior.
+- **How to reach 100%:** the canonical 15 GET scenarios (or the justified reduced set — no `ConfigSchoolId` path, no nullable fields) plus the command validator tests are designed to cover the standard shape — if a line or branch is still uncovered, it means a real branch has no test. **Add the missing scenario** (e.g. the null-safe nav fallback in the `Projection`, an empty-result path, each validator rule's pass/fail). Do NOT paper over a gap by deleting code, over-excluding with `[ExcludeFromCodeCoverage]`, or writing an assertion-free test that merely executes a line — the added test must assert meaningful behavior.
 - **If 100% is genuinely unreachable** for a specific branch (e.g. a defensive guard that no seedable input can trigger), do not silently fall short: leave a `// TODO(AB#<id>): <branch> uncovered — <why>` at that spot, report the exact class + line + achieved percentages in the final summary, and mark the story `scaffold` (not `full`). A slice below 100% coverage without a logged, justified exception is a run defect.
 
 Emit the exact marker `BUILD: SUCCESS` or `BUILD: FAIL` (the wrapper greps for it). If the build cannot be made green after reasonable effort, keep the branch, leave a clear `// TODO(AB#<id>)` at the unresolved spot, log the errors, and emit `BUILD: FAIL` — do not delete work.
@@ -283,7 +337,8 @@ If a story lacks enough detail to implement a correct endpoint (unknown entity/t
 ## Exit behavior
 
 1. Ensure you are still on the `story/...` branch and your generated files are present as **uncommitted** changes (`git status --short`). Do not switch branches — the wrapper leaves the repo here for the user.
-2. Emit one marker per story: `STORY <id> GENERATED: <Feature> — <full|scaffold> — <files count> files`. **`full` REQUIRES both test tiers AND 100% line + branch coverage** (unit under `Admissions.Tests/Features/` AND the API tier under `Admissions.Tests/ApiTests/Features/` with approved `*.verified.txt`, plus the coverage gate in Step 4 met at 100% line and 100% branch on the feature's non-`[ExcludeFromCodeCoverage]` classes). A slice with unit tests only, or one below 100% coverage without a logged justified exception, is NOT `full` — mark it `scaffold` and list the missing API-tier files and/or uncovered lines/branches in the summary. Log the achieved line% and branch% per feature. Include an approximate file count comparable to the reference PR (a GET feature is ~25+ files with the API tier + snapshots, not ~4).
+2. Emit one marker per story: `STORY <id> GENERATED: <Feature> — <full|scaffold> — <files count> files`. **`full` REQUIRES both test tiers, every `SCRUB-ASSERT CHECK` at `OK`, AND 100% line + branch coverage** (unit under `Admissions.Tests/Features/` AND the API tier under `Admissions.Tests/ApiTests/Features/` with approved `*.verified.txt`, plus the coverage gate in Step 4 met at 100% line and 100% branch on the feature's non-`[ExcludeFromCodeCoverage]` classes). A slice with unit tests only, one with a `SCRUB-ASSERT CHECK: … MISSING`, or one below 100% coverage without a logged justified exception, is NOT `full` — mark it `scaffold` and list the missing API-tier files, unasserted scrubbed members, and/or uncovered lines/branches in the summary. Log the achieved line% and branch% per feature. Include an approximate file count comparable to the reference PR (a GET feature is ~25+ files with the API tier + snapshots, not ~4).
+   Also emit, per feature, the scrub/assert and scenario-count lines: `SCRUB-ASSERT CHECK: <Feature> — <member>: OK|MISSING` (one per scrubbed member) and `SCENARIOS: <Feature> — <k> of 15 (<reason for any omission>)`.
 3. Emit the build marker exactly once: `BUILD: SUCCESS` or `BUILD: FAIL`.
 4. Emit one association marker per feature (Step 5): `ASSOCIATE <Feature>: <n> cases — <s> succeeded, <f> failed (<skipped> placeholders skipped)`, or `ASSOCIATE SKIPPED (<Feature>): <reason>` when the Step 5.1 gate blocked it. A skip is **informational, not a failure** — it must not change the story's `full`/`scaffold` verdict or the build marker.
 5. Print a final summary in this format, then exit 0:
@@ -295,11 +350,21 @@ Branch:  <targetBranch>  (changes left UNCOMMITTED for review)
 Stories: <n>   Generated: <full m / scaffold s>   Build: <SUCCESS|FAIL>
   - #<id> <Feature>: <full|scaffold>  (<verb>, <files> files)
   - ...
+Test coverage shape:
+  - <Feature>: <k>/15 scenarios (<omission reason, or "full set">)  |  PK: <shape>  |  scrubbed: <members> (all asserted)
+  - ...
 Test-case association (ADO 'Test Case Global Repo'):
   - <Feature>: <s>/<n> associated  |  SKIPPED — <reason>
   - ...
 Assumptions / TODOs for the user to review:
   - <anything you guessed or stubbed>
+
+Pre-PR checklist (recurring review findings — the automation cannot do these for you):
+  - Link the PR/commit artifact to EVERY story in ADO, not just the first
+    (on PR #3123 only 1 of 3 stories had one, making the combined branch hard to find from ADO).
+  - Reconcile the `version.props` / changelog business rule against this change set — it appears
+    not to apply to work scoped under `src/Services.Admissions/` (peer PRs #2981 and #2991 also
+    touched nothing outside it), so confirm rather than assume.
 
 Next steps for the user (after reviewing the diff):
   - To commit + push:  git add <files>; git commit -m "..."; git push -u origin HEAD
