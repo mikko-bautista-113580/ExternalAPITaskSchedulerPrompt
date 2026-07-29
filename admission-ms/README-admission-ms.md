@@ -221,6 +221,26 @@ than under-coverage **only if** the reason is recorded both as an in-code `// NO
 run summary (`SCENARIOS: <Feature> — <k> of 15 (<reason>)`). Review of PR #3123 accepted
 `OAStandardReportingType`'s 9 of 15 precisely because the in-code NOTE explained it.
 
+### Tenancy through a junction table (the fan-out pattern)
+
+Not every entity reaches `dbo.ConfigSchool` by a single-valued FK chain. When it carries a bare, non-FK
+id (`memberid`, …), the link is often a **junction table keyed on that same column** — which an
+FK-only walk never finds, because there is no FK to follow. The ladder now searches for one explicitly
+(both in the schema catalog and in `EFModel/`, where the entity + `DbSet` often already exist), and it
+cross-checks the **ADO test suite**: a suite containing `ConfigSchool*` scenarios or
+`Sort*_ConfigSchoolId` cases is the PO stating that `ConfigSchoolId` must be a filterable/sortable DTO
+field, so a "no path" conclusion contradicting it must be resolved, not shipped.
+
+Where the junction is one-to-many, `ConfigSchoolId` is still exposed — the endpoint mirrors production
+and returns **one row per (entity × school)**. Because that projection is no longer 1:1 with the base
+entity, the DTO's `Projection` is typed over a small `Shared/<Feature>Source.cs` join row instead of the
+entity, and the handler joins in LINQ. Omitting `ConfigSchoolId` is now an explicit last resort
+requiring **two** agreeing signals (ladder *and* suite).
+
+> Added after AB#256329: a run omitted `ConfigSchoolId` and shipped `scaffold` because `memberid` had no
+> FK — missing `dbo.OAInquiryBySchool`, which was already in `EFModel/` with a `DbSet`. The story lost
+> its `full` status and all 19 of its ADO test cases stayed `Not Automated`.
+
 ### Conventions the prompt pins
 
 - **File-scoped namespaces in every new file** (`namespace X;`, not a braced block). New files will

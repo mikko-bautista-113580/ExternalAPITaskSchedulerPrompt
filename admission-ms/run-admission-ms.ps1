@@ -361,6 +361,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
         switch ($ev.type) {
             'system' {
                 if ($ev.subtype -eq 'init') { Write-Log "[claude:init] model=$($ev.model) cwd=$($ev.cwd) session=$($ev.session_id)" }
+                elseif ($ev.subtype -eq 'thinking_tokens') { }  # per-delta token-accounting heartbeat -- carries no payload; suppress (was ~45% of the log)
                 else { Write-Log "[claude:system] $($ev.subtype)" }
             }
             'assistant' {
@@ -368,7 +369,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
                     switch ($block.type) {
                         'text'     { ($block.text -split "`r?`n") | Where-Object { $_ -ne '' } | ForEach-Object { Write-Log "[claude] $_" } }
                         'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)" }
-                        'thinking' { $t = ($block.thinking -replace "`r?`n", ' '); if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; Write-Log "[claude:thinking] $t" }
+                        'thinking' { $t = ($block.thinking -replace "`r?`n", ' ').Trim(); if ($t) { if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; Write-Log "[claude:thinking] $t" } }
                         default    { Write-Log "[claude:assistant:?] $($block.type)" }
                     }
                 }
