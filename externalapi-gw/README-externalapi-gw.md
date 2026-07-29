@@ -3,7 +3,21 @@
 Generates **Gateway (sis-externalapi)** endpoints from the Active sprint user stories,
 once each weekday at **07:00** local time. Output is a local `story/<id>` branch with the
 generated files left **UNCOMMITTED** for you to review and commit. The job never commits,
-pushes, opens a PR, or writes to ADO.
+pushes, opens a PR, or changes the ticket's state.
+
+**One ADO write** (Step 11): after the build and coverage gates pass, it associates the generated
+integration tests to their ADO Test Cases — PATCHing only the *automation fields* of **existing**
+Test Cases in the `Test Case Global Repo` project, via the repo's own
+`.claude/skills/_shared/scripts/AssociateTestScript.ps1`. It creates no work items and never touches
+the ticket. It is skipped — with a logged reason, never a failure — when the TestCaseIds were
+defaulted rather than enumerated from Testing Considerations, when the build/coverage gate failed, or
+when `az` isn't authenticated. Grep the log for `ASSOCIATE`. To enable it, log in once:
+
+```powershell
+az login --scope 499b84ac-1321-427f-aa17-267ca6975798/.default
+```
+
+To do it yourself afterwards: `/gw-test-associator <path to the SISApi.APITests file>`.
 
 Relocated here from `c:\neldevsrc\Github\sis-externalapi\.scheduled` so all scheduled-task
 artifacts live centrally under `TaskScheduler\`. The original `.scheduled` folder in the repo

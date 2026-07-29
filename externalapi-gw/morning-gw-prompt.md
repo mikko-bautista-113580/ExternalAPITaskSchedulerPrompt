@@ -10,13 +10,16 @@ The user has **explicitly authorized this scheduled task to run autonomously up 
 - Gate A (PROPOSED → APPROVED) — DO NOT pause for user approval; proceed directly to local implementation
 - Gate B (READY → PUSHED) — **the gate stays closed**. You are NOT authorized to push or open a PR. Stop at READY.
 
-Other rules from `.claude/CLAUDE.md` STILL APPLY: no merge/rebase/force-push, no branch-delete, ADO state ceiling stays where it is (do not advance ADO state — the user will move it manually if/when they push).
+Other rules from `.claude/CLAUDE.md` STILL APPLY: no merge/rebase/force-push, no branch-delete, ADO state ceiling stays where it is for the **ticket** (do not advance the story's state — the user will move it manually if/when they push).
+
+The one exception: the user has additionally authorized **Step 11 — test-case association**, which sets the automation fields (and `State`) on the **Test Case** work items the generated integration tests implement. That is a different work item from the ticket; the ticket's own state ceiling is untouched.
 
 ## Hard prohibitions (the run FAILS if you do any of these)
 
 - ❌ NO `git push` of any kind, to any remote, for any branch
 - ❌ NO `gh pr create` / `mcp__github__create_pull_request` / opening a draft PR / publishing a PR
-- ❌ NO ADO work-item state changes
+- ❌ NO ADO state changes **to the ticket** (or any story/Feature/task work item)
+  - ✅ **Single carve-out:** Step 11 may PATCH the **automation fields of existing Test Case work items** in the **`Test Case Global Repo`** project (`AutomatedTestName`, `AutomatedTestStorage`, `AutomatedTestId`, `AutomationStatus`, and that test case's own `System.State` → `Automated`). That is the only ADO write permitted. It **creates no work items**, never touches the ticket, and never runs on a defaulted/invented TestCaseId.
 - ❌ **NO `git add`, `git commit`, or any staging/commit operation.** This is the policy change: the user wants to review the modified and added files in their IDE *before* any commit happens. Leave every generated file uncommitted in the working tree on the new `story/{id}` branch.
 - ❌ NO `git stash`, `git reset --hard`, `git restore`, `git clean`, or anything that could discard files. The user's uncommitted WIP and the files you just generated must all stay visible in the working tree.
 - ❌ NO `git checkout main` after you've created `story/{id}`. Stay on `story/{id}` at exit so the user finds their repo on that branch with the generated files visible.
@@ -121,7 +124,7 @@ For each ticket `{id}` with title `{title}`:
 
         If the ticket has NO Testing Considerations link AND no inline test-suite list, log `WARN (ticket {id}): no Testing Considerations link found — falling back to default suites from generate-get-endpoint.md` and proceed; do NOT fail the ticket on this alone. If a link exists but is unreachable / 404 / requires interactive auth, log `FAILED (ticket parse: Testing Considerations link unreachable: <url>)` and continue to the next ticket — do NOT silently substitute defaults when a link was explicitly provided.
 
-10. **Create the branch, then scaffold inside it.** Run `git checkout --no-track -b story/{id} origin/main` to create and switch to the new branch from a fresh `origin/main` reference. The branch starts clean (no leftover state from prior runs). **The `--no-track` flag is REQUIRED** — without it, branching off a remote-tracking ref (`origin/main`) makes git set the new branch's upstream to `origin/main`. That later breaks the user's `git push` (with `push.default=simple` git refuses because the local name `story/{id}` ≠ upstream name `main`). `--no-track` leaves the branch with no upstream, so the user's first `git push -u origin HEAD` sets tracking correctly. After branching, follow `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` exactly — that file is the **single authoritative codegen reference**. Do NOT invoke the `gw-endpoint-orchestrator`, `gw-endpoint-cloner-get`, `gw-build-fixer`, `gw-test-associator`, or `gw-pr-creator` skills. Read `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` from disk and execute its Steps 1, 2, and 3 (Extract User Story Information → Generate Code Components → Generate Test Files) for the ticket id from Step 1. Apply its Integration Test Rules, Unit Test Rules, Reference Object Rules, and Endpoint Validation Checklist as-is.
+10. **Create the branch, then scaffold inside it.** Run `git checkout --no-track -b story/{id} origin/main` to create and switch to the new branch from a fresh `origin/main` reference. The branch starts clean (no leftover state from prior runs). **The `--no-track` flag is REQUIRED** — without it, branching off a remote-tracking ref (`origin/main`) makes git set the new branch's upstream to `origin/main`. That later breaks the user's `git push` (with `push.default=simple` git refuses because the local name `story/{id}` ≠ upstream name `main`). `--no-track` leaves the branch with no upstream, so the user's first `git push -u origin HEAD` sets tracking correctly. After branching, follow `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` exactly — that file is the **single authoritative codegen reference**. Do NOT invoke the `gw-endpoint-orchestrator`, `gw-endpoint-cloner-get`, `gw-build-fixer`, or `gw-pr-creator` skills. (`gw-test-associator` is no longer on this list — Step 11 now runs its script directly; see Step 11 for why the skill itself is still not *invoked*.) Read `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` from disk and execute its Steps 1, 2, and 3 (Extract User Story Information → Generate Code Components → Generate Test Files) for the ticket id from Step 1. Apply its Integration Test Rules, Unit Test Rules, Reference Object Rules, and Endpoint Validation Checklist as-is.
 
     **DTO source-of-truth (CRITICAL — past runs got this wrong):** When generating the Input, Output, and any nested DTO/output classes, the property names, types, nullability, and required-ness MUST come from the **parsed ViewModels you echoed in step 9b**, NOT from the StudentsHomeroom reference pattern. The StudentsHomeroom files are reference only for *structure* (file layout, ExcludeFromCodeCoverage attribute, constructor pattern, namespace shape) — they are NOT the source of properties. Concretely:
 
@@ -196,9 +199,49 @@ For each ticket `{id}` with title `{title}`:
         Generate the list by running `git status --porcelain` and **excluding the user's pre-existing WIP** (the snapshot you recorded in pre-flight step 4). The user's WIP entries are theirs, not yours — do not include them in the summary.
     - **Sanity check (do not skip):** run `git status --porcelain`, subtract the pre-existing WIP, and confirm the remaining entries match what `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` says you should have produced. If any expected file is missing, OR any unexpected file is present, log `FAILED (file-set mismatch: <details>)`. Do NOT try to "clean up" by deleting files — the user will resolve it manually.
 
-11. **STOP HERE.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on `story/{id}` with all generated files visible in the working tree. Log: `READY (uncommitted): branch story/{id} created off origin/main; {N} files added, {M} files modified; coverage line={x}% branch={y}% — awaiting user review`.
+11. **Associate the integration tests to their ADO test cases.** Once the build is green and the coverage gate has passed, link each `[TestCaseId("...")]`-annotated integration test method back to the ADO Test Case it implements, so the Test Case flips to `Automated` and points at the real method. This is the **only** ADO write this run performs (see the carve-out in Hard prohibitions) and it **updates existing test cases only — it never creates one**.
 
-12. **Single-ticket policy reminder:** after processing the chosen ticket, **do NOT loop to the next ticket** (per the single-ticket-per-run policy at the top of this prompt). Move to the Exit Behavior section.
+    **11a. Gate — run it only if ALL of these hold.** If any fails, log a WARN, skip the association, and go to step 12. A skipped association is **never** a ticket failure and never changes the `READY` verdict:
+
+    - **The TestCaseIds are REAL — i.e. they came from the step-9c enumeration.** ⚠️ **If step 9c took the `WARN` path and the TestCaseIds were defaulted from `generate-get-endpoint.md`, do NOT associate.** Those are placeholder IDs the user is expected to fill in before pushing (step 10 logs `TestCaseIds defaulted (no Testing Considerations link)`); PATCHing them either 404s or, worse, writes automation fields onto an unrelated real work item. Skip and log `ASSOCIATE SKIPPED: TestCaseIds were defaulted, not enumerated from Testing Considerations`.
+    - **Build green and coverage gate passed.** Never associate a red test — a Test Case marked `Automated` pointing at a failing method is worse than one left in `Design`. If the ticket is `FAILED (build)` or `FAILED (coverage: …)`, skip.
+    - **`az` is authenticated** — check `az account show --query user.name -o tsv`. ⚠️ **You are a non-interactive scheduled task — do NOT run `az login`** (the `gw-test-associator` skill prompts the user to; you have no user to prompt). It would block on a browser prompt until the task times out. On failure/empty, skip and log `ASSOCIATE SKIPPED: az not authenticated — run 'az login --scope 499b84ac-1321-427f-aa17-267ca6975798/.default' and re-associate manually`.
+    - **Every generated `[TestCaseId(...)]` maps 1:1 to an enumerated case** per the step-10 mapping. If any test method is tagged `TODO` in that mapping, skip the file and log which.
+
+    **11b. Resolve the script — it is IN THIS REPO; do NOT use the plugin copy.** Use the first path that exists:
+
+    ```powershell
+    $assocCandidates = @(
+        '{{REPO_ROOT}}\.claude\skills\_shared\scripts\AssociateTestScript.ps1',
+        '{{REPO_ROOT}}\.windsurf\workflows\Development\AssociateTests\AssociateTestScript.ps1'
+    )
+    $assocScript = $assocCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    ```
+
+    ⚠️ **Do NOT substitute the sis-pdlc-plugin copy** (`…\resources\scripts\associate-test-scripts-to-testcases\associate-test-script.ps1`). It is *not* equivalent: it lacks the `SISApi\.APITests` branch in its service-name detection, so for a Gateway integration-test path it leaves `$serviceName` blank and exits 1 with *"Some variables (Filename, Classname, Namespace, ServiceName) are blank"*. Only the two in-repo copies above handle `SISApi.APITests`. Verified 2026-07-29. If neither exists, log `ASSOCIATE SKIPPED: AssociateTestScript.ps1 not found in repo` and continue — do **not** hand-roll the PATCH calls.
+
+    **11c. Run it — once, on the generated integration test file.** Associate the **integration tier only** (`src/Applications.SISApi/SISApi.APITests/Features/…/…Tests.cs`). The unit tests under `SISApi.Tests/` are not associated.
+
+    ```powershell
+    & $assocScript -FilePath '<ABSOLUTE path to the SISApi.APITests .cs file>' -Mode 'Associate' -Org 'renweb' -Project 'Test Case Global Repo'
+    ```
+
+    - **`-FilePath` MUST be a full absolute path** starting with the drive letter. The script calls `Resolve-Path` and derives namespace + class from the file; a relative path makes it exit 1.
+    - **`-Project` is `Test Case Global Repo`**, *not* `ColdFusion` — test cases live in that project. Keep the quotes (the space is URL-encoded by the script).
+    - **Run it ONCE and wait for it to finish — do NOT re-run it.** Each run assigns a fresh `AutomatedTestId` GUID, and the script makes one sequential REST call per test case (allow up to 5 minutes). Interrupting or re-running just churns the work items.
+    - This is the same command `.claude/skills/gw-test-associator/SKILL.md` documents — read that file if you need detail on the output format. Run the script **directly** rather than invoking the skill: the skill is written for an interactive session (it asks the user which file to pick and prompts for `az login`), neither of which works headless.
+
+    **11d. Report.** The script prints an association phase and a validation table. Capture its `=== SUMMARY ===` counts and confirm every row shows `State = Automated` / `Automation Status = Automated` with no `ERROR`. Emit:
+
+    ```
+    ASSOCIATE {id}: <n> cases — <s> succeeded, <f> failed
+    ```
+
+    or `ASSOCIATE SKIPPED ({id}): <reason>`. Failures are **non-fatal**: log them, keep the generated code, surface them in the final summary, and do **not** retry more than once.
+
+12. **STOP HERE.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on `story/{id}` with all generated files visible in the working tree. Log: `READY (uncommitted): branch story/{id} created off origin/main; {N} files added, {M} files modified; coverage line={x}% branch={y}% — awaiting user review`.
+
+13. **Single-ticket policy reminder:** after processing the chosen ticket, **do NOT loop to the next ticket** (per the single-ticket-per-run policy at the top of this prompt). Move to the Exit Behavior section.
 
 ## Exit behavior
 
@@ -221,6 +264,11 @@ Result:
   - {chosen-id}: FAILED (file-set mismatch: <details>)
   - {chosen-id}: FAILED ({short reason})
 
+Test-case association (ADO 'Test Case Global Repo'):
+  - {chosen-id}: <s>/<n> associated
+    OR
+  - {chosen-id}: SKIPPED — <reason>
+
 Repo is now on branch: story/{chosen-id}  (or "main" if no ticket was processed)
 Files to review:
   <list each generated file path, A=added, M=modified, one per line>
@@ -229,6 +277,8 @@ Next steps for the user:
   - To review:               git diff origin/main      (shows everything generated)
   - To commit + push:        git add <files>; git commit -m "AB#{id} [ExternalAPIGW] GET: {Domain} - {Resource} Endpoint"; git push -u origin HEAD
                              (use `git push -u origin HEAD` — it pushes to a same-named remote branch and sets upstream correctly; a plain `git push` may fail because this branch has no upstream yet)
+  - To associate skipped/failed test cases:  /gw-test-associator <path to the SISApi.APITests file>
+                             (fill in the real TestCaseIds first if they were logged as defaulted)
   - To discard:              git checkout -- .; git clean -fd src/; git checkout main; git branch -D story/{id}
 ```
 
