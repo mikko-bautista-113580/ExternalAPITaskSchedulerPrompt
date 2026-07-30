@@ -108,7 +108,15 @@ try {
     # Fetch is read-only w.r.t. the working tree; makes origin/main + PR refs current.
     Write-Log "Fetching origin (prune) ..."
     git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
-    if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
+    if ($LASTEXITCODE -ne 0) {
+        # A concurrent git process (sibling automation on the same repo, or the user's IDE)
+        # can update refs mid-fetch, giving "cannot lock ref ...: is at X but expected Y".
+        # That is transient -- pause briefly and retry once so origin/main isn't left stale.
+        Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- possible concurrent ref lock; retrying once."
+        Start-Sleep -Seconds 5
+        git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
+        if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch retry also failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
+    }
 
     # Snapshot existing reports so we can report just this run's output.
     $reportsBefore = @{}
