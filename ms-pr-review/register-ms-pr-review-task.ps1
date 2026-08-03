@@ -26,7 +26,7 @@
 param(
     [string]$TaskName   = 'MS-PRReview',
     [string[]]$Times    = @('08:00','10:00','12:00','14:00','16:00','18:00'),
-    [string]$Model      = '',            # '' => wrapper default (opus). e.g. 'sonnet' to override.
+    [string]$Model      = '',            # '' => wrapper default (claude-opus-5). e.g. 'sonnet' to override.
     [switch]$RunNow,
     [switch]$Unregister
 )

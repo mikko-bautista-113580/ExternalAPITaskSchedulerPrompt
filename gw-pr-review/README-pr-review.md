@@ -120,8 +120,8 @@ prompt (the `{{REVIEW_AUTHORS}}` / `{{CURRENT_USER}}` / `{{OUTPUT_DIR}}` placeho
 Everything below is edit-a-file; no rebuild.
 
 - **Times / days** — re-run `register-pr-review-task.ps1` with `-Times '09:00','13:00',...`.
-- **Model** — default is `opus` (best for semantic review). For cheaper/faster runs register with
-  `-Model sonnet`, or edit the `$Model` default in `run-pr-review.ps1`.
+- **Model** — pinned to `claude-opus-5` (best for semantic review). For cheaper/faster runs register
+  with `-Model sonnet`, or edit the `$Model` default in `run-pr-review.ps1`.
 - **Authors, approval owner, 7-day window** — edit Step 1 of `pr-review-prompt.md`.
 - **Rules / severities** — edit `pr-review-standards.md`.
 - **Report look** — edit `pr-review-template.html` (CSS + render JS).
@@ -161,7 +161,7 @@ pwsh -File "...\register-pr-review-task.ps1" -Unregister
 ## Post-run process review
 
 After each run finishes, the wrapper calls the shared `Invoke-LogReview` (`..\lib\log-review.ps1`),
-which runs a second headless `claude` (opus) on `..\lib\log-review-prompt.md` to review **this run's
+which runs a second headless `claude` (`claude-opus-5`) on `..\lib\log-review-prompt.md` to review **this run's
 log** for process improvements (timeouts, path mismatches, wasted cycles, `WARN`/`FATAL` lines, prompt
 issues). It writes a report next to the log (`logs\<TaskName>\<TaskName>_<timestamp>.review.md`) and,
 when the automation tree is clean, applies **validated, uncommitted** fixes to this repo's own files

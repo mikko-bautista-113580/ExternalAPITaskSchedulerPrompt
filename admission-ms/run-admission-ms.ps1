@@ -1,8 +1,8 @@
 param(
     [string]$TaskName = 'manual',
-    # Model alias passed to the claude CLI. 'opus' = latest Opus (best for full-impl + build).
-    # Switch to 'sonnet' for cheaper/faster runs.
-    [string]$Model = 'opus'
+    # Model passed to the claude CLI. Pinned to Claude Opus 5 (best for full-impl + build).
+    # Pass 'sonnet' for cheaper/faster runs.
+    [string]$Model = 'claude-opus-5'
 )
 
 $ErrorActionPreference = 'Continue'

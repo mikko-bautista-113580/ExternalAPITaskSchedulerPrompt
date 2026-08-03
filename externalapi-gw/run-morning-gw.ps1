@@ -520,7 +520,7 @@ ORDER BY [System.Id] ASC
     }
 
     Write-Milestone '✓' "Wrapper pre-flight passed (on main, fetched origin/main)"
-    Write-Milestone '→' "Launching claude (model=claude-opus-4-7)..."
+    Write-Milestone '→' "Launching claude (model=claude-opus-5)..."
 
     $exitCode = 0
     try {
@@ -528,7 +528,7 @@ ORDER BY [System.Id] ASC
             --print `
             --verbose `
             --dangerously-skip-permissions `
-            --model claude-opus-4-7 `
+            --model claude-opus-5 `
             --output-format stream-json `
             --input-format text 2>&1 |
             ForEach-Object { Process-ClaudeEvent -line $_ }

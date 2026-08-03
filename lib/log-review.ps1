@@ -7,7 +7,7 @@
 #   Invoke-LogReview -LogFile $LogFile -TaskName $TaskName -ScheduledDir $ScheduledDir `
 #       -TargetRepo $RepoRoot -ClaudeCmd $ClaudeCmd -ExitCode $exitCode
 #
-# What it does: reads the run's own log, asks claude (opus) to find where the AUTOMATION
+# What it does: reads the run's own log, asks claude (Claude Opus 5) to find where the AUTOMATION
 # process (wrappers / prompts / standards) can be improved, VALIDATES each fix against the
 # current source, applies validated fixes as UNCOMMITTED edits to the automation repo, and
 # writes a markdown report next to the log. It NEVER commits/pushes and NEVER touches the
@@ -24,7 +24,7 @@ function Invoke-LogReview {
         [Parameter(Mandatory)][string]$TargetRepo,   # sis-services / sis-externalapi — OFF-LIMITS
         [Parameter(Mandatory)][string]$ClaudeCmd,    # %APPDATA%\npm\claude.cmd
         [int]$ExitCode = 0,
-        [string]$Model = 'opus',
+        [string]$Model = 'claude-opus-5',
         [int]$WaitSeconds = 120                       # max wait for the log to finish writing
     )
 

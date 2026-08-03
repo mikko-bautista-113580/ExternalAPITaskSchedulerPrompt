@@ -1,8 +1,8 @@
 param(
     [string]$TaskName = 'manual',
-    # Model alias passed to the claude CLI. 'opus' = latest Opus (best for full semantic
-    # review). Switch to 'sonnet' if you want cheaper/faster runs across the daily slots.
-    [string]$Model = 'opus'
+    # Model passed to the claude CLI. Pinned to Claude Opus 5 (best for full semantic
+    # review). Pass 'sonnet' if you want cheaper/faster runs across the daily slots.
+    [string]$Model = 'claude-opus-5'
 )
 
 $ErrorActionPreference = 'Continue'

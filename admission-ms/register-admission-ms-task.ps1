@@ -31,7 +31,7 @@
 param(
     [string]$TaskName   = 'AdmissionMS-EndpointGen',
     [string[]]$Times    = @('07:00'),
-    [string]$Model      = '',            # '' => wrapper default (opus). e.g. 'sonnet' to override.
+    [string]$Model      = '',            # '' => wrapper default (claude-opus-5). e.g. 'sonnet' to override.
     [switch]$RunNow,
     [switch]$Unregister
 )

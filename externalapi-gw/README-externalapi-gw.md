@@ -54,7 +54,7 @@ Start-ScheduledTask -TaskName 'GW-MorningAutoPR-0700'   # run now
 ## Post-run process review
 
 After each run finishes, the wrapper calls the shared `Invoke-LogReview` (`..\lib\log-review.ps1`),
-which runs a second headless `claude` (opus) on `..\lib\log-review-prompt.md` to review **this run's
+which runs a second headless `claude` (`claude-opus-5`) on `..\lib\log-review-prompt.md` to review **this run's
 log** for process improvements (timeouts, path mismatches, wasted cycles, `WARN`/`FATAL` lines, prompt
 issues). It writes a report next to the log (`logs\<TaskName>\<TaskName>_<timestamp>.review.md`) and,
 when the automation tree is clean, applies **validated, uncommitted** fixes to this repo's own files

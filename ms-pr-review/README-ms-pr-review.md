@@ -137,8 +137,8 @@ prompt (`{{REVIEW_AUTHORS}}` / `{{CURRENT_USER}}` / `{{OUTPUT_DIR}}` placeholder
 Everything below is edit-a-file; no rebuild.
 
 - **Times / days** — re-run `register-ms-pr-review-task.ps1` with `-Times '09:00','13:00',...`.
-- **Model** — default is `opus` (best for semantic review). For cheaper/faster runs register with
-  `-Model sonnet`, or edit the `$Model` default in `run-ms-pr-review.ps1`.
+- **Model** — pinned to `claude-opus-5` (best for semantic review). For cheaper/faster runs register
+  with `-Model sonnet`, or edit the `$Model` default in `run-ms-pr-review.ps1`.
 - **Team members** — edit `team-roster.json` at the repo root (add/remove a `{ "name", "github" }`).
   The review list is derived automatically as *roster minus the current user*; no script edits needed.
 - **7-day window** — edit Step 1 of `pr-review-ms-prompt.md`.
@@ -180,7 +180,7 @@ pwsh -File "...\register-ms-pr-review-task.ps1" -Unregister
 ## Post-run process review
 
 After each run finishes, the wrapper calls the shared `Invoke-LogReview` (`..\lib\log-review.ps1`),
-which runs a second headless `claude` (opus) on `..\lib\log-review-prompt.md` to review **this run's
+which runs a second headless `claude` (`claude-opus-5`) on `..\lib\log-review-prompt.md` to review **this run's
 log** for process improvements (timeouts, path mismatches, wasted cycles, `WARN`/`FATAL` lines, prompt
 issues). It writes a report next to the log (`logs\<TaskName>\<TaskName>_<timestamp>.review.md`) and,
 when the automation tree is clean, applies **validated, uncommitted** fixes to this repo's own files

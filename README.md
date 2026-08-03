@@ -93,14 +93,14 @@ pwsh -File .\<job>\run-<job>.ps1 -TaskName manual -Model sonnet
 pwsh -File .\<job>\register-<job>-task.ps1 -Unregister
 ```
 
-Wrappers default to the `opus` model (best for semantic work); pass `-Model sonnet` for
+Wrappers are pinned to `claude-opus-5` (best for semantic work); pass `-Model sonnet` for
 cheaper/faster runs.
 
 ## Post-run process review
 
 Every job ends by reviewing **its own run**. After the wrapper writes `=== … run finished …`,
 it calls the shared `Invoke-LogReview` (`lib/log-review.ps1`), which launches a second headless
-`claude` (opus) on `lib/log-review-prompt.md`. That reviewer reads the run's log, finds where the
+`claude` (`claude-opus-5`) on `lib/log-review-prompt.md`. That reviewer reads the run's log, finds where the
 **automation process** (wrappers / prompts / standards) can be improved — timeouts, Windows/Unix
 path mismatches, wasted rebuild cycles, `WARN`/`FATAL` lines, etc. — **validates** each fix against
 the current source, and writes a markdown report next to the log
