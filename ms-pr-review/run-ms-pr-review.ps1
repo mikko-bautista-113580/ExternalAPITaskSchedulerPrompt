@@ -7,6 +7,10 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# gh/git emit UTF-8; decode their stdout as UTF-8 so captured text isn't mojibake in the log
+# (gh's "check mark" was logging as 'Γ£ô'). No-op/harmless when no console is attached.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
 $Repo         = 'nelnet-nbs/sis-services'
 $ScheduledDir = $PSScriptRoot   # this folder — automation files live alongside the wrapper
 
@@ -105,19 +109,6 @@ try {
     $headBefore   = (git rev-parse HEAD 2>&1).Trim()
     Write-Log "Branch before: $branchBefore   HEAD before: $headBefore"
 
-    # Fetch is read-only w.r.t. the working tree; makes origin/main + PR refs current.
-    Write-Log "Fetching origin (prune) ..."
-    git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
-    if ($LASTEXITCODE -ne 0) {
-        # A concurrent git process (sibling automation on the same repo, or the user's IDE)
-        # can update refs mid-fetch, giving "cannot lock ref ...: is at X but expected Y".
-        # That is transient -- pause briefly and retry once so origin/main isn't left stale.
-        Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- possible concurrent ref lock; retrying once."
-        Start-Sleep -Seconds 5
-        git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
-        if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch retry also failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
-    }
-
     # Snapshot existing reports so we can report just this run's output.
     $reportsBefore = @{}
     Get-ChildItem $OutputDir -Filter 'PR-*.html' -ErrorAction SilentlyContinue |
@@ -155,6 +146,35 @@ try {
         }
     } catch {
         Write-Log "Pre-check error (non-fatal): $_  -- launching claude anyway."
+    }
+
+    # Fetch is read-only w.r.t. the working tree; makes origin/main + PR refs current for the
+    # claude launch. Skipped on a no-op run: the pre-check above reads only `gh pr list` (network)
+    # and local report filenames, so it has no dependency on local refs -- and most scheduled
+    # slots skip, so fetching first made every no-op run pay for a fetch nothing consumed.
+    if (-not $skipClaude) {
+        Write-Log "Fetching origin (prune) ..."
+        $fetchOut  = git fetch --prune origin 2>&1
+        $fetchExit = $LASTEXITCODE
+        $fetchOut | ForEach-Object { Write-Log "[git fetch] $_" }
+        if ($fetchExit -ne 0) {
+            if (@($fetchOut | ForEach-Object { "$_" }) -match "\.lock': File exists") {
+                # Case-colliding remote-tracking refs (origin/Bug/x vs origin/bug/x) cannot both
+                # hold a .lock on a case-insensitive filesystem, so --prune fails identically on
+                # every run -- retrying cannot help. origin/main and the PR refs still updated,
+                # so this is cosmetic. One-time cure, by a human, in the target repo:
+                #   git update-ref -d refs/remotes/origin/Bug/<colliding-branch>
+                Write-Log "NOTE: --prune could not delete case-colliding remote refs (Windows case-insensitive FS); origin/main + PR refs are still current. Not retrying -- it cannot succeed."
+            } else {
+                # A concurrent git process (sibling automation on the same repo, or the user's IDE)
+                # can update refs mid-fetch, giving "cannot lock ref ...: is at X but expected Y".
+                # That is transient -- pause briefly and retry once so origin/main isn't left stale.
+                Write-Log "WARN: git fetch failed (exit=$fetchExit) -- possible concurrent ref lock; retrying once."
+                Start-Sleep -Seconds 5
+                git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
+                if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch retry also failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
+            }
+        }
     }
 
     # ----- stream-json event parser (detailed log + PR-review milestones) ---
