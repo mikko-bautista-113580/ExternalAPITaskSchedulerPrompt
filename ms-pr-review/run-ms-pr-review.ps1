@@ -252,6 +252,10 @@ try {
         switch ($ev.type) {
             'system' {
                 if ($ev.subtype -eq 'init') { Write-Log "[claude:init] model=$($ev.model) cwd=$($ev.cwd) session=$($ev.session_id)" }
+                # 'thinking_tokens' is a contentless token-count heartbeat -- skip it; it added
+                # ~100 empty lines (~28% of) this run's log, and the post-run log-review reads the
+                # whole file, so the noise wastes tokens/cost on every run.
+                elseif ($ev.subtype -eq 'thinking_tokens') { }
                 else { Write-Log "[claude:system] $($ev.subtype)" }
             }
             'assistant' {
@@ -259,7 +263,7 @@ try {
                     switch ($block.type) {
                         'text'     { ($block.text -split "`r?`n") | Where-Object { $_ -ne '' } | ForEach-Object { Write-Log "[claude] $_" } }
                         'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)" }
-                        'thinking' { $t = ($block.thinking -replace "`r?`n", ' '); if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; Write-Log "[claude:thinking] $t" }
+                        'thinking' { $t = ($block.thinking -replace "`r?`n", ' '); if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; if (-not [string]::IsNullOrWhiteSpace($t)) { Write-Log "[claude:thinking] $t" } }
                         default    { Write-Log "[claude:assistant:?] $($block.type)" }
                     }
                 }
