@@ -466,15 +466,27 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                                 $script:milestones.TestSuitesEnumerated[$tid] = $true
                                 # The prompt now mandates a trailing `Total: {n} test cases` line;
                                 # `(n cases` is a tolerated fallback for the older freelanced header.
-                                $tcMatch = [regex]::Match($txt, 'Total:\s+(\d+)\s+test cases')
-                                if (-not $tcMatch.Success) { $tcMatch = [regex]::Match($txt, '\((\d+)\s+cases') }
+                                # Search only the text AFTER this ticket's header — when claude
+                                # emits all three enumerations in one text block (as on 2026-08-03)
+                                # a whole-block match reuses the first ticket's total for every
+                                # ticket (reported 17/17/17 when the real counts were 17/14/18).
+                                $after   = $txt.Substring($mm.Index)
+                                $tcMatch = [regex]::Match($after, 'Total:\s+(\d+)\s+test cases')
+                                if (-not $tcMatch.Success) { $tcMatch = [regex]::Match($after, '\((\d+)\s+cases') }
                                 $count = if ($tcMatch.Success) { $tcMatch.Groups[1].Value } else { '?' }
                                 Write-Milestone '✓' "Ticket $tid test suites enumerated ($count test cases mapped)"
                             }
                         }
-                        # Per-ticket completion verdict.
-                        foreach ($mm in [regex]::Matches($txt, 'TICKET\s+(\d+)\s+(READY|FAILED)')) {
-                            $tid = $mm.Groups[1].Value; $verdict = $mm.Groups[2].Value
+                        # Per-ticket completion verdict. Accept BOTH the step-12 marker
+                        # (`TICKET {id} READY`) and the exit-summary shape the prompt's own
+                        # template uses (`  - {id}: READY (...)`). On 2026-08-03 claude emitted
+                        # only the latter, so the tracker reported "0 READY / 0 FAILED of 3" plus
+                        # a bogus "Tickets with NO verdict" defect line for a fully successful run.
+                        $verdictRx = '(?:TICKET\s+(?<id>\d+)\s+(?<v>READY|FAILED)' +
+                                     '|^\s*-\s*(?<id>\d+):\s*(?<v>READY|FAILED)\b)'
+                        foreach ($mm in [regex]::Matches($txt, $verdictRx,
+                                    [System.Text.RegularExpressions.RegexOptions]::Multiline)) {
+                            $tid = $mm.Groups['id'].Value; $verdict = $mm.Groups['v'].Value
                             if (-not $script:milestones.TicketDone.ContainsKey($tid)) {
                                 $script:milestones.TicketDone[$tid] = $verdict
                                 $n = $script:milestones.TicketDone.Count
@@ -496,7 +508,10 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                     # The stream-json doesn't always inline the name on the result side, so
                     # we infer from the previous tool_use call. Cheap heuristic: keep a tiny
                     # rolling map keyed by tool_use_id.
-                    $resultText = Format-ToolResultPreview -content $block.content
+                    # Match against a generous slice, not the 250-char log preview — the build
+                    # summary lives at the tail of dotnet's output. This text is only regexed,
+                    # never logged, so it costs no log volume.
+                    $resultText = Format-ToolResultPreview -content $block.content -MaxLength 20000
                     $isError    = $block.is_error -eq $true
 
                     # Connection milestones — best-effort detection from the result content shape
@@ -584,7 +599,12 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
     }
 
     function Format-ToolResultPreview {
-        param($content)
+        # MaxLength defaults to the 250-char log preview. Milestone matching passes a much
+        # larger value: MSBuild prints its "Build succeeded / N Error(s) / N Warning(s)"
+        # summary at the END of the output, so a 250-char head almost never contains it —
+        # on 2026-08-03 the first build's result matched neither branch (no milestone at all)
+        # and the later one reported "Build succeeded (warnings: ?)".
+        param($content, [int]$MaxLength = 250)
         if ($null -eq $content) { return '(empty)' }
         $text = if ($content -is [array]) {
             ($content | ForEach-Object {
@@ -592,7 +612,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
             }) -join ' '
         } elseif ($content -is [string]) { $content } else { $content | ConvertTo-Json -Compress -Depth 2 }
         $text = $text -replace '\s+', ' '
-        if ($text.Length -gt 250) { $text = $text.Substring(0, 250) + '...' }
+        if ($text.Length -gt $MaxLength) { $text = $text.Substring(0, $MaxLength) + '...' }
         return $text
     }
 
@@ -616,7 +636,13 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                 if ($ev.subtype -eq 'init') {
                     $toolCount = if ($ev.tools) { ($ev.tools).Count } else { 0 }
                     Write-Log "[claude:init] model=$($ev.model) cwd=$($ev.cwd) tools=$toolCount session=$($ev.session_id)"
-                } else {
+                }
+                # 'thinking_tokens' is a contentless per-delta token-accounting heartbeat. It
+                # produced 203 of the 798 lines (25%) in the 2026-08-03 run, and the post-run
+                # log-review reads the whole file, so the noise costs tokens on every run.
+                # The admission-ms and ms-pr-review wrappers already suppress it; match them.
+                elseif ($ev.subtype -eq 'thinking_tokens') { }
+                else {
                     Write-Log "[claude:system] $($ev.subtype)"
                 }
             }
@@ -631,9 +657,13 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                             Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)"
                         }
                         'thinking' {
-                            $t = ($block.thinking -replace "`r?`n", ' ')
-                            if ($t.Length -gt 200) { $t = $t.Substring(0, 200) + '...' }
-                            Write-Log "[claude:thinking] $t"
+                            # Redacted/empty thinking blocks carry no text; logging them emitted
+                            # 48 bare "[claude:thinking]" lines in the 2026-08-03 run. Skip them.
+                            $t = ($block.thinking -replace "`r?`n", ' ').Trim()
+                            if ($t) {
+                                if ($t.Length -gt 200) { $t = $t.Substring(0, 200) + '...' }
+                                Write-Log "[claude:thinking] $t"
+                            }
                         }
                         default {
                             Write-Log "[claude:assistant:?] $($block.type)"
