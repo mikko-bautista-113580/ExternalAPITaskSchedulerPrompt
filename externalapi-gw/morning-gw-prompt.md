@@ -181,6 +181,25 @@ Now loop over the tickets from the Runtime inputs block, **ascending by ID**, st
 
     **Test-coverage source-of-truth:** When generating integration/unit tests, the suites and test cases you cover MUST come from the **Testing Considerations enumeration you echoed in step 9c**. After the codegen step:
     - Build a mapping of `enumerated TestCaseId → generated test method name` and print it to the log. Every TestCaseId from step 9c MUST appear in the mapping with a non-empty test-method name; tag any missing case `TODO`. Conversely, every `[TestCaseId("...")]` attribute in the generated test files MUST come from the step-9c enumeration — no invented IDs.
+
+    - **🚨 `AutomatedTestName` LENGTH BUDGET — ADO hard-caps this field at 256 characters, and long `TestName =` values silently blow it.** The association script (step 11) sends `AutomatedTestName = <namespace>.<class>.<method>`, and **for a parameterized test it appends the entire `[TestCaseId]` argument list**, e.g.:
+
+        ```
+        SISApi.APITests.Features.Admissions.OAStandardReportingType.Queries.GetOAStandardReportingTypeTests.GetOAStandardReportingType_DistrictWideAdmissionsReadDescendingSort_200("-Description", TestName = "GetOAStandardReportingType_SortDescending_Description_200")
+        ```
+
+        That is **259 characters** → ADO rejects the PATCH with `400 Bad Request` / `TF401324: Value for field 'Microsoft.VSTS.TCM.AutomatedTestName' is too long.`, and that one test case is left `Not Automated`. This really happened to TC296341 on the 2026-08-03 run, while its sibling TC296338 survived at *exactly* 256 — so the failure looks arbitrary and is easy to misdiagnose. (A past run wrongly blamed the work item's `State=Ready`. That was not the cause: `Ready → Automated` is a valid transition and 13 sibling cases made it from the same state. **Never explain an association 400 as a state-transition problem without checking the name length first.**)
+
+        Rules when generating parameterized (stacked `[TestCaseId]`) tests:
+        1. **Keep `TestName` short — omit the feature/class prefix and the `_200` suffix.** Use the bare merged convention already in the repo: `TestName = "SortAscending_Id"`, `"SortDescending_Description"` — **not** `"Get{Feature}_SortDescending_Description_200"`. The class already scopes the name, so the prefix is pure length with no information gain.
+        2. **Compute the full name and assert it fits.** For every `[TestCaseId]`, build `<namespace>.<class>.<method>` plus the verbatim argument list and check `length <= 256`. Print one line per attribute that is within 32 chars of the cap:
+
+            ```
+            NAME-LENGTH CHECK: {TestCaseId} len={n} (limit 256) OK|OVER
+            ```
+
+            Any `OVER` must be fixed **before** step 11 runs — shorten `TestName` further (or the method name) and re-check. Do not proceed to association with a known-over-length name; it is a guaranteed 400.
+        3. Note that the deepest namespaces are the longest: `SISApi.APITests.Features.<Domain>.<Feature>.Queries.<Feature>Tests.` alone is ~100 chars for a feature name like `OAStandardReportingType`, leaving only ~155 for method + arguments. Budget accordingly for long feature names.
     - If step 9c produced no enumeration (the `WARN` path), fall back to the default suites and TestCaseIds prescribed by `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` — and clearly log `TestCaseIds defaulted (no Testing Considerations link)` so the user knows to fill them in before pushing.
 
     **MS client-library dependency (NuGet) — resolve via the INTERNAL feed BEFORE concluding a ticket is blocked.** Gateway GET endpoints are thin wrappers over the domain microservice's client library (e.g. `SIS.Admissions.Service.Client`, referenced in `src/Applications.SISApi/SISApi.API/SISApi.API.csproj`). The generated Query/Output/Controller reference client types such as `I{Resource}Client`, `{Resource}Dto`, `Get{Resource}V1HttpResponseAsync`. If those types are not present in the currently-referenced package version the build fails. Handle it like this — do NOT give up after only checking nuget.org:
@@ -270,6 +289,7 @@ Now loop over the tickets from the Runtime inputs block, **ascending by ID**, st
     - **Build green and coverage gate passed.** Never associate a red test — a Test Case marked `Automated` pointing at a failing method is worse than one left in `Design`. If the ticket is `FAILED (build)` or `FAILED (coverage: …)`, skip.
     - **`az` is authenticated** — check `az account show --query user.name -o tsv`. ⚠️ **You are a non-interactive scheduled task — do NOT run `az login`** (the `gw-test-associator` skill prompts the user to; you have no user to prompt). It would block on a browser prompt until the task times out. On failure/empty, skip and log `ASSOCIATE SKIPPED: az not authenticated — run 'az login --scope 499b84ac-1321-427f-aa17-267ca6975798/.default' and re-associate manually`.
     - **Every generated `[TestCaseId(...)]` maps 1:1 to an enumerated case** per the step-10 mapping. If any test method is tagged `TODO` in that mapping, skip the file and log which.
+    - **Every derived `AutomatedTestName` is ≤ 256 characters** (the `NAME-LENGTH CHECK` lines from step 10). This is a **fix-then-proceed** gate, not a skip: an `OVER` entry will 400 with `TF401324 ... is too long` and leave that one case `Not Automated`, so shorten the offending `TestName` in the test file first and re-check, then associate. Do not run the script with a known-over-length name, and do not skip the whole file over one long name.
 
     **11b. Resolve the script — it is IN THIS REPO; do NOT use the plugin copy.** Use the first path that exists:
 
@@ -301,6 +321,13 @@ Now loop over the tickets from the Runtime inputs block, **ascending by ID**, st
     ```
 
     or `ASSOCIATE SKIPPED ({id}): <reason>`. Failures are **non-fatal**: log them, keep the generated code, surface them in the final summary, and do **not** retry more than once.
+
+    **When some cases succeed and one or two fail, diagnose the failure — do not guess a cause.** The script prints `Failed to Associate TestCaseId <id>: <error>`; quote that error verbatim in the log and name the actual reason. Checklist, in order:
+    1. **`TF401324 ... 'AutomatedTestName' is too long`** → the 256-char cap (see step 10's length budget). Fix the `TestName`, re-check, re-associate that file. This is the most likely cause when *most* cases succeed and the failures are the ones with the longest scenario names (e.g. `..._Description` failing while `..._Id` succeeds).
+    2. **404** → the TestCaseId does not exist in `Test Case Global Repo` (a defaulted/invented id, or a typo).
+    3. **A genuine rule violation** → quote ADO's message.
+
+    ⚠️ **Do NOT attribute a failure to the work item's `System.State`.** `Ready → Automated` is a valid transition — sibling cases associate from `Ready` on every run. A case sitting in `Ready` after a failed association is the *consequence* of the failure, not its cause, and reporting it that way sends the user to change a state that was never the problem. If you cannot determine the cause from the script's error text, say so plainly (`ASSOCIATE {id}: 13/14 — TC<id> failed: <verbatim error>; cause not determined`) rather than inventing one.
 
 12. **Record this ticket's verdict, then move to the next ticket.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on the run's target branch with all generated files visible in the working tree. Emit exactly one verdict line for this ticket:
 
