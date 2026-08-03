@@ -1,6 +1,12 @@
-You are running as a Windows scheduled task. Your job is to **scaffold the Gateway GET endpoint code locally** for the next eligible active Azure DevOps ticket assigned to **you** — i.e. the identity that owns `ADO_PAT` (use `[System.AssignedTo] = @Me` in WIQL; `@Me` resolves to whoever is running this). **Do not commit, do not push, do not open a PR.** Generate the files in the working tree on a new `story/{id}` branch and stop — the user reviews the modified/added files in their IDE and decides whether to commit + push, or discard.
+You are running as a Windows scheduled task. Your job is to **scaffold the Gateway GET endpoint code locally** for **every** eligible active Azure DevOps ticket assigned to **you** — i.e. the identity that owns `ADO_PAT` (`@Me` resolves to whoever is running this). **Do not commit, do not push, do not open a PR.** Generate the files in the working tree on a **single** `story/...` branch and stop — the user reviews the modified/added files in their IDE and decides whether to commit + push, or discard.
 
-**Single-ticket-per-run policy.** Process AT MOST ONE eligible ticket per scheduled run. If the user has multiple active ExternalAPIGW tickets, pick the one with the lowest work-item ID and skip the rest with `SKIPPED (queued — process one at a time)`. This keeps the working tree readable and avoids piling uncommitted files from multiple tickets onto one branch.
+**⚠️ The wrapper appends a "Runtime inputs" block to the END of this prompt. That block is AUTHORITATIVE for this run** — it carries the ADO org/project, the current sprint, the exact **target branch name**, the **branch mode** (`create`/`reuse`), and the **list of eligible tickets**. Use those IDs and that exact branch name. Do not re-derive the eligible set and do not invent a different branch name.
+
+**All-tickets-one-branch policy.** Process **every** ticket in the Runtime inputs list, in ascending ID order, and put all of them on the **one** branch the wrapper assigned. The branch is named after every ticket it carries — a single ticket gives `story/{id}`, several give `story/{id1}_{id2}_{id3}` (ascending, underscore-separated). One branch means the user's eventual push is **one PR** covering the whole sprint's Gateway work instead of one PR per ticket.
+
+- Never create a second branch mid-run, and never switch away from the assigned branch between tickets.
+- A ticket that fails is **isolated**: log `TICKET {id} FAILED (<reason>)`, leave whatever it produced in place, and continue to the next ticket. One bad ticket must not abort the run or discard another ticket's work.
+- Every ticket in the list must end with exactly one `TICKET {id} READY` or `TICKET {id} FAILED (<reason>)` line. The wrapper greps for these to report per-ticket progress; a ticket with no verdict is reported as a defect.
 
 ## Autonomy override (explicit user authorization)
 
@@ -10,9 +16,11 @@ The user has **explicitly authorized this scheduled task to run autonomously up 
 - Gate A (PROPOSED → APPROVED) — DO NOT pause for user approval; proceed directly to local implementation
 - Gate B (READY → PUSHED) — **the gate stays closed**. You are NOT authorized to push or open a PR. Stop at READY.
 
-Other rules from `.claude/CLAUDE.md` STILL APPLY: no merge/rebase/force-push, no branch-delete, ADO state ceiling stays where it is for the **ticket** (do not advance the story's state — the user will move it manually if/when they push).
+Other rules from `.claude/CLAUDE.md` STILL APPLY: no rebase, no force-push, no branch-delete, ADO state ceiling stays where it is for **every ticket** you process (do not advance any story's state — the user will move them manually if/when they push).
 
-The one exception: the user has additionally authorized **Step 11 — test-case association**, which sets the automation fields (and `State`) on the **Test Case** work items the generated integration tests implement. That is a different work item from the ticket; the ticket's own state ceiling is untouched.
+Two narrow exceptions:
+1. **Step 11 — test-case association**, which sets the automation fields (and `State`) on the **Test Case** work items the generated integration tests implement. Those are different work items from the tickets; the tickets' own state ceilings are untouched.
+2. **`git merge --no-edit origin/main` in Step 3's `reuse` path only.** This is the single permitted merge: a fast-forward of the reused target branch up to `origin/main`, which the wrapper has already verified cannot conflict (it only selects `reuse` when `origin/main` is an ancestor). It is not a general licence to merge — no merging between story branches, no merging to bring in someone else's work, and if it conflicts you abort it rather than resolve it. The blanket no-merge rule still applies everywhere else.
 
 ## Hard prohibitions (the run FAILS if you do any of these)
 
@@ -20,9 +28,11 @@ The one exception: the user has additionally authorized **Step 11 — test-case 
 - ❌ NO `gh pr create` / `mcp__github__create_pull_request` / opening a draft PR / publishing a PR
 - ❌ NO ADO state changes **to the ticket** (or any story/Feature/task work item)
   - ✅ **Single carve-out:** Step 11 may PATCH the **automation fields of existing Test Case work items** in the **`Test Case Global Repo`** project (`AutomatedTestName`, `AutomatedTestStorage`, `AutomatedTestId`, `AutomationStatus`, and that test case's own `System.State` → `Automated`). That is the only ADO write permitted. It **creates no work items**, never touches the ticket, and never runs on a defaulted/invented TestCaseId.
-- ❌ **NO `git add`, `git commit`, or any staging/commit operation.** This is the policy change: the user wants to review the modified and added files in their IDE *before* any commit happens. Leave every generated file uncommitted in the working tree on the new `story/{id}` branch.
+- ❌ **NO `git add`, `git commit`, or any staging/commit operation.** The user wants to review the modified and added files in their IDE *before* any commit happens. Leave every generated file uncommitted in the working tree on the run's target branch.
 - ❌ NO `git stash`, `git reset --hard`, `git restore`, `git clean`, or anything that could discard files. The user's uncommitted WIP and the files you just generated must all stay visible in the working tree.
-- ❌ NO `git checkout main` after you've created `story/{id}`. Stay on `story/{id}` at exit so the user finds their repo on that branch with the generated files visible.
+- ❌ NO `git checkout main` (or any branch switch) after you've created the target branch. Stay on it at exit so the user finds their repo on that branch with every ticket's generated files visible.
+- ❌ NO creating a second branch mid-run. All tickets share the one branch from the Runtime inputs block — that is what makes them a single PR.
+- ❌ NO reverting, deleting, or `git checkout`-ing a file another ticket in this run generated or modified. A failing ticket cleans up **only its own** changes (and only via `Edit`).
 - ❌ NO `claude_self_reviewed` PR comments (no PR exists to comment on).
 
 ## Execution environment
@@ -37,41 +47,66 @@ What this means for you:
 - The user's WIP (modified `.mcp.json`, untracked `.scheduled/`, possibly others) MUST be preserved. Use explicit `git add <path>` for each generated file. NEVER `git add -A` or `git add .`.
 - The Azure DevOps MCP is configured via the live `.mcp.json` in the repo — you may READ from it (query tickets, test plans, wiki). **GitHub API / `gh` CLI access is NOT required for this task** — the scheduled-task environment often lacks SAML-authorized credentials, so do not depend on `mcp__github__*` tools or `gh`. Use git-native commands (`git ls-remote`, `git branch`) for any remote/local branch existence checks. Writes to GitHub are forbidden anyway per the Hard Prohibitions.
 
-## Step 1 — Check for an active ticket FIRST (before any git pre-flight)
+## Step 1 — Confirm the ticket list from Runtime inputs
 
-**Do this before anything else.** Query ADO for an eligible ticket up front so the run exits cheaply when there is nothing to work on — no point running the git pre-flight, switching branches, or touching the working tree if the user has no active ExternalAPIGW ticket in the current iteration.
+**The wrapper has already done the discovery.** It resolved the current sprint for project=`ColdFusion` / team=`Modernization Team`, ran the WIQL for `State = Active` AND `AssignedTo = @Me` AND `Title CONTAINS 'ExternalAPIGW'`, and handed you the resulting IDs + titles in the Runtime inputs block. It also already exited early (before any git work) if that set was empty — so if you are reading this, there is at least one ticket to do.
 
-1. Use the Azure DevOps MCP to find the current iteration for project=`ColdFusion`, team=`Modernization Team` (use `mcp__azure__work_list_iterations` or `mcp__azure__work_list_team_iterations` with `timeFrame=current`).
-2. List work items in that iteration where `AssignedTo` = `@Me` (the ADO PAT owner — whoever is running this) AND `State` = "Active" (use `mcp__azure__wit_get_work_items_for_iteration` or `mcp__azure__wit_query_by_wiql`).
-3. For each work item, fetch `id`, `System.Title`, and Domain/Resource info from the System Info / Technical Requirements fields.
-4. **Title filter (REQUIRED):** Keep only work items where `System.Title` contains the literal string `ExternalAPIGW` (case-insensitive). Log each discarded ticket as `SKIP (not ExternalAPIGW): {id} - {title}`.
+Your job here is **confirmation, not re-discovery**:
 
-**If no matching ExternalAPIGW tickets remain, log `No active ExternalAPIGW tickets found in current iteration` and exit cleanly with status 0 — do NOT run the git pre-flight (Step 2), do NOT switch branches, and do NOT modify the working tree.** There is nothing to do this run.
+1. Read the ticket list from the Runtime inputs block. That is the set to process — all of it.
+2. For each ticket, fetch `id`, `System.Title`, and the Domain/Resource info from the System Info / Technical Requirements fields (the full-fidelity fetch happens per-ticket in step 9a).
+3. **Title filter (safety net):** confirm each `System.Title` still contains the literal string `ExternalAPIGW` (case-insensitive). If one does not, log `SKIP (not ExternalAPIGW): {id} - {title}` and drop it — but do not go looking for replacements.
+4. Do **not** run your own iteration/WIQL query to expand or second-guess the list, and do **not** apply any "process one at a time" rule. Every ticket in the block gets processed this run.
 
-## Step 2 — Pre-flight (only once an eligible ticket has been found)
+### ⚠️ Azure DevOps MCP tool names — use the CONSOLIDATED tools
 
-Run these read-only checks only after Step 1 has found at least one eligible ticket:
+The ADO MCP server exposes a small set of **consolidated** tools that take an `action` argument. The older per-action names do **not** exist and calling them wastes a round-trip:
+
+| Do NOT use (no longer exists) | Use instead |
+|---|---|
+| `work_list_iterations`, `work_list_team_iterations` | `mcp__azure__work` |
+| `wit_query_by_wiql` | `mcp__azure__wit_query` with `action: "wiql"` **and** a `wiql` argument |
+| `wit_get_work_item`, `wit_get_work_items_for_iteration`, `wit_get_work_item_type` | `mcp__azure__wit_work_item` |
+| `testplan_list_test_suites`, `testplan_list_test_cases` | `mcp__azure__testplan` |
+| `wiki_get_page_content` | `mcp__azure__wiki` |
+
+**Never guess an `action` value.** A past run inferred `action: "by_wiql"` from the old tool name and got `Invalid enum value ... options: ["get","get_results","wiql"]`, then a second failure for a missing `wiql` argument. If a tool rejects your arguments with an invalid-enum or missing-argument error, `ToolSearch` for that tool's real schema **before** retrying — do not brute-force action names.
+
+## Step 2 — Pre-flight
+
+Run these read-only checks before touching the working tree:
 
 1. Confirm `Get-Location` (or `pwd`) returns exactly `{{REPO_ROOT}}`. If not, log `FATAL: not running in user's main repo` and exit immediately.
 2. Confirm `git rev-parse --abbrev-ref HEAD` returns `main`. If not, log `FATAL: not on main branch` and exit — the wrapper should have left you on main; if you're not, something is wrong.
 3. Confirm `git rev-parse HEAD` matches `origin/main`. If not, log a warning and exit.
-4. Record the list of currently-uncommitted files via `git status --porcelain` and stash that list in memory. You'll use it at the end to verify the user's WIP was preserved.
+4. Record the list of currently-uncommitted files via `git status --porcelain` and stash that list in memory as **`WIP_BEFORE`**. You'll use it to attribute generated files per ticket (step 10) and at the end to verify the user's WIP was preserved.
+
+## Step 3 — Get onto the target branch (ONCE, before any codegen)
+
+Use the **exact branch name AND `Branch mode`** from the Runtime inputs block. The wrapper already resolved a safe name — it reuses an existing branch only when that is safe (origin/main is still an ancestor, so a merge cannot conflict), otherwise it hands you a unique `-2`/`-3` name. Do NOT invent a different name, and do NOT check branch existence yourself.
+
+- **`create`** (the name is guaranteed free) — make it fresh off the latest `origin/main`:
+  ```
+  git checkout --no-track -b <targetBranch> origin/main
+  ```
+  Use `-b` (create-only), **never `-B`** — `-B` would reset/clobber a branch. **`--no-track` is REQUIRED**: branching off a remote-tracking ref otherwise makes git set the new branch's upstream to `origin/main`, which later breaks the user's `git push` (with `push.default=simple` git refuses because the local name ≠ upstream name `main`). `--no-track` leaves no upstream, so the user's first `git push -u origin HEAD` sets tracking correctly.
+
+- **`reuse`** (continue on an existing branch the wrapper judged safe) — switch on WITHOUT resetting, then bring it up to date:
+  ```
+  git switch <targetBranch>
+  git merge --no-edit origin/main
+  ```
+  The wrapper only picks `reuse` when `origin/main` is already an ancestor, so this should fast-forward cleanly. **If it reports a conflict anyway, do not resolve it** — `git merge --abort`, then `git checkout --no-track -b <targetBranch>-2 origin/main` (bump the suffix until unused) and continue there.
+
+Log which branch you actually ended up on. **This branch carries every ticket in the run** — you create it once here and stay on it until exit.
 
 ## For each active ticket
 
-For each ticket `{id}` with title `{title}`:
+Now loop over the tickets from the Runtime inputs block, **ascending by ID**, staying on the branch from Step 3. Steps 9–12 below run once **per ticket**.
 
-7. **Skip-if-branch-already-exists check** (READ-only, git-native — no GitHub API needed). Run BOTH of:
-   - `git branch --list story/{id}` (local)
-   - `git ls-remote --heads origin story/{id}` (origin)
+**Per-ticket failure isolation.** If a ticket fails at any step, log `TICKET {id} FAILED (<reason>)`, leave whatever it already wrote on disk, and move to the next ticket. Specifically, when a ticket fails you must NOT: abort the run, `git checkout main`, create another branch, revert or delete another ticket's files, or undo another ticket's `.csproj` bump.
 
-   If EITHER returns a result, the branch is already in use (a prior run, an in-flight push, an open PR, or a recently-merged-but-not-deleted PR). Log `SKIP: branch story/{id} already exists locally and/or on origin — leave it for user review` and continue to the next ticket. Do NOT recreate or modify the branch.
-
-   Edge case: a closed/merged PR whose branch was deleted on origin will NOT be detected by `git ls-remote`. That's acceptable — the upstream "ticket must be Active in current iteration" filter (Step 1) catches it, because a merged ticket should no longer be Active. If you ever observe a merged-but-still-Active ticket, the ADO state is the bug, not this check.
-
-8. _(Consolidated into step 7 — no separate local-only check needed.)_
-
-9. **Strict ticket parse (MANDATORY before any codegen — past runs scaffolded from reference files and silently invented properties / skipped test suites).** Do this *before* creating the branch. If any required artifact is missing or unparseable, log `FAILED (ticket parse: <reason>)` and continue to the next ticket without creating the branch.
+9. **Strict ticket parse (MANDATORY before any codegen — past runs scaffolded from reference files and silently invented properties / skipped test suites).** Do this *before* writing any file for this ticket. If any required artifact is missing or unparseable, log `TICKET {id} FAILED (ticket parse: <reason>)` and continue to the next ticket without writing anything for it. (The branch already exists from Step 3 — do not create or switch branches here.)
 
     9a. **Full-fidelity ticket fetch.** Call `mcp__azure__wit_get_work_item` with `id={id}`, `expand=All`, and explicitly include all of these in the `fields` parameter so nothing is truncated:
         - `System.Title`
@@ -120,11 +155,16 @@ For each ticket `{id}` with title `{title}`:
             - TC######  400 when schoolId < 1
           Suite: NotFound
             - TC######  404 when schoolId has no records
+          Total: {n} test cases
         ```
+
+        **The trailing `Total: {n} test cases` line is MANDATORY and must be the literal words `Total: <number> test cases`** — the wrapper greps for exactly that to report the mapped-case count in its milestone. Emit the header and this total verbatim in the shape above; do not reformat them.
+
+        **Scope the `mcp__azure__testplan` call to the specific `suiteId`** you parsed from the Testing Considerations link, and request only the fields you need (`id`, `title`). Listing a whole plan returns tens of thousands of characters, overflows the tool-result limit, spills to a file on disk, and costs a recovery `Grep` — that happened on a past run with an 86,015-character payload.
 
         If the ticket has NO Testing Considerations link AND no inline test-suite list, log `WARN (ticket {id}): no Testing Considerations link found — falling back to default suites from generate-get-endpoint.md` and proceed; do NOT fail the ticket on this alone. If a link exists but is unreachable / 404 / requires interactive auth, log `FAILED (ticket parse: Testing Considerations link unreachable: <url>)` and continue to the next ticket — do NOT silently substitute defaults when a link was explicitly provided.
 
-10. **Create the branch, then scaffold inside it.** Run `git checkout --no-track -b story/{id} origin/main` to create and switch to the new branch from a fresh `origin/main` reference. The branch starts clean (no leftover state from prior runs). **The `--no-track` flag is REQUIRED** — without it, branching off a remote-tracking ref (`origin/main`) makes git set the new branch's upstream to `origin/main`. That later breaks the user's `git push` (with `push.default=simple` git refuses because the local name `story/{id}` ≠ upstream name `main`). `--no-track` leaves the branch with no upstream, so the user's first `git push -u origin HEAD` sets tracking correctly. After branching, follow `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` exactly — that file is the **single authoritative codegen reference**. Do NOT invoke the `gw-endpoint-orchestrator`, `gw-endpoint-cloner-get`, `gw-build-fixer`, or `gw-pr-creator` skills. (`gw-test-associator` is no longer on this list — Step 11 now runs its script directly; see Step 11 for why the skill itself is still not *invoked*.) Read `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` from disk and execute its Steps 1, 2, and 3 (Extract User Story Information → Generate Code Components → Generate Test Files) for the ticket id from Step 1. Apply its Integration Test Rules, Unit Test Rules, Reference Object Rules, and Endpoint Validation Checklist as-is.
+10. **Scaffold the endpoint on the existing branch.** You are already on the run's target branch from Step 3 — **do not create, switch, or reset a branch here.** Follow `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` exactly — that file is the **single authoritative codegen reference**. Do NOT invoke the `gw-endpoint-orchestrator`, `gw-endpoint-cloner-get`, `gw-build-fixer`, or `gw-pr-creator` skills. (`gw-test-associator` is no longer on this list — Step 11 now runs its script directly; see Step 11 for why the skill itself is still not *invoked*.) Read `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` from disk and execute its Steps 1, 2, and 3 (Extract User Story Information → Generate Code Components → Generate Test Files) for the ticket id from Step 1. Apply its Integration Test Rules, Unit Test Rules, Reference Object Rules, and Endpoint Validation Checklist as-is.
 
     **DTO source-of-truth (CRITICAL — past runs got this wrong):** When generating the Input, Output, and any nested DTO/output classes, the property names, types, nullability, and required-ness MUST come from the **parsed ViewModels you echoed in step 9b**, NOT from the StudentsHomeroom reference pattern. The StudentsHomeroom files are reference only for *structure* (file layout, ExcludeFromCodeCoverage attribute, constructor pattern, namespace shape) — they are NOT the source of properties. Concretely:
 
@@ -146,14 +186,16 @@ For each ticket `{id}` with title `{title}`:
        (append `--prerelease` only if no stable version exposes the types). Take the highest version the INTERNAL feed returns.
     3. **Bump the PackageReference** for that client in `SISApi.API.csproj` to the latest internal version, then `dotnet restore src/Applications.SISApi/Applications.SISApi.sln` from the repo root (restore reads the repo nuget.config, so it authenticates against the internal feed via the configured credential provider). This csproj bump is an expected local change — leave it **uncommitted** in the working tree like every other generated file.
     4. **Verify the required types now exist** before continuing codegen/build: locate the restored assembly at `~/.nuget/packages/sis.<domain>.service.client/<version>/lib/net8.0/*.Service.Client.dll` and grep for the exact type name(s) you need, e.g. `grep -aoE '{Resource}[A-Za-z0-9_]*' <dll> | sort -u`. Confirm the plain GET types are present — do NOT mistake a similarly-named sibling for the real type (e.g. `OARequestInfo*` GET types vs the unrelated `OARequestInfoTrack*` types).
-    5. **Only declare the ticket blocked if the LATEST version on the INTERNAL feed still lacks the types.** In that case log `FAILED (upstream client missing: <package> <latest-internal-version> lacks <types>)`, note that the parent MS story's client NuGet has not been re-published yet, revert the csproj bump (via `Edit`, not a destructive git op) so the tree is clean, and continue. Never conclude "blocked" from a nuget.org-only check.
+    5. **Only declare the ticket blocked if the LATEST version on the INTERNAL feed still lacks the types.** In that case log `TICKET {id} FAILED (upstream client missing: <package> <latest-internal-version> lacks <types>)`, note that the parent MS story's client NuGet has not been re-published yet, revert **only this ticket's own** csproj bump (via `Edit`, not a destructive git op), and continue. Never conclude "blocked" from a nuget.org-only check.
+
+    6. **⚠️ Bumps are CUMULATIVE across tickets — never undo another ticket's work.** Several tickets in one run may each need a different `SIS.<Domain>.Service.Client` bumped in the same `SISApi.API.csproj`. That file therefore accumulates edits as the run proceeds. Rules: re-read the csproj immediately before each bump (it may already have changed since the last ticket); change only the one `PackageReference` line your ticket needs; and when reverting a blocked ticket's bump, restore that single line to the version it had *when your ticket started*, never `git checkout`/`git restore` the file (that would wipe the earlier tickets' bumps too).
 
     After the codegen steps are complete:
-    - Build the solution to verify there are no compile errors: `dotnet build src/Applications.SISApi/Applications.SISApi.sln` from the repo root. If errors, fix them and rebuild; loop up to 5 times before giving up and recording the ticket as `FAILED (build)`. Leave the fixes uncommitted in the working tree like everything else.
+    - Build the solution to verify there are no compile errors: `dotnet build src/Applications.SISApi/Applications.SISApi.sln` from the repo root. If errors, fix them and rebuild; loop up to 5 times before giving up and recording the ticket as `TICKET {id} FAILED (build)`. Leave the fixes uncommitted in the working tree like everything else. **Build per ticket, not once at the end** — that is what keeps a broken ticket from sinking the others. If the build breaks and the errors are in a *previous* ticket's files rather than yours, that is cross-ticket interference: fix it (both tickets need a green build) and note it in the summary.
     - **Coverage gate — 100% line AND 100% branch REQUIRED.** After the build is green, run the generated tests with coverage and confirm the code you generated for this ticket hits **100% line coverage AND 100% branch coverage** (both sides of every `if`/ternary/null-check/`??`/switch arm exercised) — measured only over the classes this ticket adds (the `Query` handler, the `Output`/`Input`/nested DTOs and their mapping, any `Reference` classes, and any non-`[ExcludeFromCodeCoverage]` wiring), not the whole solution. The Controller carries `[ExcludeFromCodeCoverage]` per `generate-get-endpoint.md` and is correctly excluded — do NOT strip that attribute to game the number, and do NOT add `[ExcludeFromCodeCoverage]` to a handler/DTO-mapper to dodge coverage.
       1. Measure with coverlet: `dotnet test src/Applications.SISApi/Applications.SISApi.sln --filter "FullyQualifiedName~{FeatureName}" /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:Include="[SISApi.API]*{FeatureName}*"`. If the repo already wires a `coverlet.runsettings` or `--collect:"XPlat Code Coverage"` path, discover and use that instead of inventing flags. Read `line-rate` **and** `branch-rate` for each generated class from the emitted `coverage.cobertura.xml`; both must be `1` (100%).
       2. If any line or branch is uncovered, it means a scenario from the step-9c enumeration (or the `generate-get-endpoint.md` default suites) is missing — **add the test** (empty/404 path, each validation branch, each nullable-field branch of the Output mapping) and re-run until both rates are 100%. The added test must assert real behavior, not merely execute the line.
-      3. If a specific branch is genuinely unreachable (a defensive guard no valid input can hit), do not silently fall short: leave a `// TODO(AB#{id}): <branch> uncovered — <why>`, and record the class + line + achieved line%/branch% in the ticket summary. A ticket below 100% coverage without a logged, justified exception is `FAILED (coverage: <class> line=<x>% branch=<y>%)`.
+      3. If a specific branch is genuinely unreachable (a defensive guard no valid input can hit), do not silently fall short: leave a `// TODO(AB#{id}): <branch> uncovered — <why>`, and record the class + line + achieved line%/branch% in the ticket summary. A ticket below 100% coverage without a logged, justified exception is `TICKET {id} FAILED (coverage: <class> line=<x>% branch=<y>%)`.
       4. **KNOWN BRANCH-COVERAGE TRAP — the `GetApimNextUrl` null-conditional chain + NSubstitute auto-mock (this is the #1 reason a GET handler lands at ~87% branch, not 100%).** Every list/paged GET Query handler contains two null-conditional chains inside the `ApimHelper.GetApimNextUrl(...)` call:
 
          ```csharp
@@ -180,11 +222,11 @@ For each ticket `{id}` with title `{title}`:
          ```
 
          Then read `cov.json` → `<module> → <file> → <class> → <method>.Branches[]`. An entry like `Offset 298, Path 0, Hits 0` on the `GetApimNextUrl` line is the middle `?.` (the `HttpContext == null` short-circuit) never taken — fix it with the "`HttpContext` null" test above and re-measure.
-    - Do **NOT** `git add`, `git stage`, or `git commit` anything. Per the Hard Prohibitions, every generated file must remain visible to the user as untracked or modified in the working tree on `story/{id}`.
+    - Do **NOT** `git add`, `git stage`, or `git commit` anything. Per the Hard Prohibitions, every generated file must remain visible to the user as untracked or modified in the working tree on the target branch.
     - **Print a clean file-change summary to the log** so the user knows exactly what to review. Format:
 
         ```
-        TICKET {id} FILES GENERATED (uncommitted on branch story/{id}):
+        TICKET {id} FILES GENERATED (uncommitted on branch <targetBranch>):
           A  src/Applications.SISApi/SISApi.API/Features/People/{FeatureName}/Queries/Get{FeatureName}V1Query.cs
           A  src/Applications.SISApi/SISApi.API/Features/People/{FeatureName}/Shared/{FeatureName}Input.cs
           A  src/Applications.SISApi/SISApi.API/Features/People/{FeatureName}/Shared/{FeatureName}Output.cs
@@ -196,10 +238,18 @@ For each ticket `{id}` with title `{title}`:
           M  src/Applications.SISApi/SISApi.API/Extensions/DependencyInjectionExtensions.cs
         ```
 
-        Generate the list by running `git status --porcelain` and **excluding the user's pre-existing WIP** (the snapshot you recorded in pre-flight step 4). The user's WIP entries are theirs, not yours — do not include them in the summary.
-    - **Sanity check (do not skip):** run `git status --porcelain`, subtract the pre-existing WIP, and confirm the remaining entries match what `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` says you should have produced. If any expected file is missing, OR any unexpected file is present, log `FAILED (file-set mismatch: <details>)`. Do NOT try to "clean up" by deleting files — the user will resolve it manually.
+        **⚠️ Attribute files to the RIGHT ticket — subtract TWO sets, not one.** Because every ticket shares one branch, `git status --porcelain` accumulates as the run proceeds: by ticket 3 it also lists tickets 1 and 2's files. Naively subtracting only the pre-run WIP would make each ticket claim all its predecessors' work.
 
-11. **Associate the integration tests to their ADO test cases.** Once the build is green and the coverage gate has passed, link each `[TestCaseId("...")]`-annotated integration test method back to the ADO Test Case it implements, so the Test Case flips to `Automated` and points at the real method. This is the **only** ADO write this run performs (see the carve-out in Hard prohibitions) and it **updates existing test cases only — it never creates one**.
+        Maintain a running set **`ATTRIBUTED_SO_FAR`**, starting empty. For each ticket:
+        1. Run `git status --porcelain`.
+        2. Subtract **`WIP_BEFORE`** (the user's pre-existing WIP from pre-flight step 4 — theirs, not yours) **and** subtract **`ATTRIBUTED_SO_FAR`** (everything already credited to an earlier ticket this run).
+        3. What remains is *this* ticket's file set — report exactly that under `TICKET {id} FILES GENERATED`.
+        4. Add those entries to `ATTRIBUTED_SO_FAR` before starting the next ticket.
+
+        One nuance: a file both tickets touch (`SISApi.API.csproj`, `Assets/PublicChangeLog.md`, `Extensions/DependencyInjectionExtensions.cs`, the regenerated `tools/apim-templates/**` nswag json) stays in `ATTRIBUTED_SO_FAR` after the first ticket claims it, so later tickets won't re-list it. That is correct for the per-ticket lists; the **final** summary's combined file list is the union of all of them plus these shared files, so nothing is lost.
+    - **Sanity check (do not skip):** run `git status --porcelain`, subtract `WIP_BEFORE` **and** `ATTRIBUTED_SO_FAR` as above, and confirm the remaining entries match what `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` says you should have produced for **this** ticket. If any expected file is missing, OR any unexpected file is present, log `TICKET {id} FAILED (file-set mismatch: <details>)`. Do NOT try to "clean up" by deleting files — the user will resolve it manually, and a delete could destroy another ticket's output.
+
+11. **Associate this ticket's integration tests to their ADO test cases.** Once **this ticket's** build is green and its coverage gate has passed, link each `[TestCaseId("...")]`-annotated integration test method back to the ADO Test Case it implements, so the Test Case flips to `Automated` and points at the real method. This is the **only** ADO write this run performs (see the carve-out in Hard prohibitions) and it **updates existing test cases only — it never creates one**. Run it **once per ticket**, against that ticket's own integration-test file only — never re-run it for a file an earlier ticket already associated.
 
     **11a. Gate — run it only if ALL of these hold.** If any fails, log a WARN, skip the association, and go to step 12. A skipped association is **never** a ticket failure and never changes the `READY` verdict:
 
@@ -239,49 +289,71 @@ For each ticket `{id}` with title `{title}`:
 
     or `ASSOCIATE SKIPPED ({id}): <reason>`. Failures are **non-fatal**: log them, keep the generated code, surface them in the final summary, and do **not** retry more than once.
 
-12. **STOP HERE.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on `story/{id}` with all generated files visible in the working tree. Log: `READY (uncommitted): branch story/{id} created off origin/main; {N} files added, {M} files modified; coverage line={x}% branch={y}% — awaiting user review`.
+12. **Record this ticket's verdict, then move to the next ticket.** Do NOT push, commit, switch branches, or invoke `gw-pr-creator`. Stay on the run's target branch with all generated files visible in the working tree. Emit exactly one verdict line for this ticket:
 
-13. **Single-ticket policy reminder:** after processing the chosen ticket, **do NOT loop to the next ticket** (per the single-ticket-per-run policy at the top of this prompt). Move to the Exit Behavior section.
+    ```
+    TICKET {id} READY (uncommitted on <targetBranch>; {N} files added, {M} files modified; coverage line={x}% branch={y}%)
+    ```
+
+    or, on any failure:
+
+    ```
+    TICKET {id} FAILED (<reason>)
+    ```
+
+    The literal prefix `TICKET {id} READY` / `TICKET {id} FAILED` is required — the wrapper greps for it to track per-ticket progress.
+
+13. **Loop to the next ticket.** Repeat steps 9–12 for the next ticket in the Runtime inputs list (ascending ID), on the **same** branch. When every ticket has a verdict, run one final whole-solution `dotnet build src/Applications.SISApi/Applications.SISApi.sln` to confirm the tickets do not conflict with each other (shared files like `DependencyInjectionExtensions.cs`, `PublicChangeLog.md`, or the `.csproj` can interact). Log `FINAL BUILD: SUCCESS` or `FINAL BUILD: FAIL (<errors>)`. If it fails, fix it if you can and say which tickets were involved — do not revert anyone's work. Then move to the Exit Behavior section.
 
 ## Exit behavior
 
-**Do NOT switch back to main** — the user wants their repo left on `story/{id}` with the generated files visible in the working tree.
+**Do NOT switch back to main** — the user wants their repo left on the target branch with every ticket's generated files visible in the working tree.
 
-Print a final summary in this exact format:
+Print a final summary in this exact format (one line per ticket, in ascending ID order):
 
 ```
-Processed: {chosen-id}
-Skipped queued (one-at-a-time policy): {list of other-active-ids, comma-separated, or "none"}
+Processed: {id1}, {id2}, {id3}      ({n} of {n} tickets from Runtime inputs)
 
 Result:
-  - {chosen-id}: READY (uncommitted on story/{id}; {N} added, {M} modified)
-    OR
-  - {chosen-id}: SKIPPED (PR already exists on origin)
-  - {chosen-id}: SKIPPED (branch story/{id} already exists locally)
-  - {chosen-id}: FAILED (ticket parse: <reason>)
-  - {chosen-id}: FAILED (build)
-  - {chosen-id}: FAILED (coverage: <class> line=<x>% branch=<y>%)
-  - {chosen-id}: FAILED (file-set mismatch: <details>)
-  - {chosen-id}: FAILED ({short reason})
+  - {id1}: READY (uncommitted; {N} added, {M} modified; coverage line=100% branch=100%)
+  - {id2}: FAILED (ticket parse: <reason>)
+  - {id3}: READY (uncommitted; {N} added, {M} modified; coverage line=100% branch=100%)
+    (other possible verdicts per ticket:)
+    FAILED (build) | FAILED (coverage: <class> line=<x>% branch=<y>%)
+    FAILED (file-set mismatch: <details>) | FAILED (upstream client missing: <pkg> <ver> lacks <types>)
+    SKIP (not ExternalAPIGW): <title>
+
+FINAL BUILD: SUCCESS | FAIL (<errors>)
 
 Test-case association (ADO 'Test Case Global Repo'):
-  - {chosen-id}: <s>/<n> associated
-    OR
-  - {chosen-id}: SKIPPED — <reason>
+  - {id1}: <s>/<n> associated
+  - {id2}: SKIPPED — <reason>
+  - {id3}: <s>/<n> associated
 
-Repo is now on branch: story/{chosen-id}  (or "main" if no ticket was processed)
-Files to review:
-  <list each generated file path, A=added, M=modified, one per line>
+Upstream client bumps (uncommitted in SISApi.API.csproj):
+  - <package> <old> → <new>   (needed by {id})     (or "none")
+
+Repo is now on branch: <targetBranch>   (all {n} tickets share this ONE branch → ONE PR)
+Files to review ({total} files across {n} tickets):
+  <combined list, grouped by ticket, A=added M=modified, one per line>
+  <shared files touched by more than one ticket, noted as such>
 
 Next steps for the user:
-  - To review:               git diff origin/main      (shows everything generated)
-  - To commit + push:        git add <files>; git commit -m "AB#{id} [ExternalAPIGW] GET: {Domain} - {Resource} Endpoint"; git push -u origin HEAD
+  - To review:               git diff origin/main      (shows everything generated, all tickets)
+  - To commit + push:        git add <files>
+                             git commit -m "AB#{id1} AB#{id2} AB#{id3} [ExternalAPIGW] GET endpoints: <Resource1>, <Resource2>, <Resource3>"
+                             git push -u origin HEAD
                              (use `git push -u origin HEAD` — it pushes to a same-named remote branch and sets upstream correctly; a plain `git push` may fail because this branch has no upstream yet)
+                             (ADO links every AB#<id> in the commit message to its ticket — include ALL of them so each ticket gets the artifact link, not just the first)
+  - To commit tickets separately instead:  git add <that ticket's files>; git commit -m "AB#{id} ..."   (repeat per ticket, then one push)
   - To associate skipped/failed test cases:  /gw-test-associator <path to the SISApi.APITests file>
                              (fill in the real TestCaseIds first if they were logged as defaulted)
-  - To discard:              git checkout -- .; git clean -fd src/; git checkout main; git branch -D story/{id}
+  - To discard everything:   git checkout -- .; git clean -fd src/; git checkout main; git branch -D <targetBranch>
 ```
+
+If a ticket produced nothing (failed at parse), still list it with its `FAILED` reason — a ticket silently missing from this summary is a defect.
 
 - Log every step with an ISO timestamp.
 - Exit with status 0 on completion. Failures should be logged with enough context to debug, not crash the run.
-- The `story/{id}` branch and its uncommitted files stay in the user's main repo. Branch deletion and cleanup are the user's call — the wrapper will refuse to start a NEW run while a previous run's `story/*` branch still has uncommitted files (you don't need to enforce that yourself; the wrapper does).
+- The target branch and its uncommitted files stay in the user's main repo. Branch deletion and cleanup are the user's call — the wrapper will refuse to start a NEW run while a previous run's `story/*` branch still has uncommitted files (you don't need to enforce that yourself; the wrapper does).
+- **Exit with status 0 even when some tickets failed.** A per-ticket failure is reported in the summary, not by crashing the run — the other tickets' work must survive.

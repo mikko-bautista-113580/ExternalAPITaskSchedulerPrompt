@@ -1,9 +1,39 @@
 # externalapi-gw — sis-externalapi Gateway endpoint generator (scheduled)
 
 Generates **Gateway (sis-externalapi)** endpoints from the Active sprint user stories,
-once each weekday at **07:00** local time. Output is a local `story/<id>` branch with the
-generated files left **UNCOMMITTED** for you to review and commit. The job never commits,
-pushes, opens a PR, or changes the ticket's state.
+once each weekday at **07:00** local time. It processes **every** eligible ticket in one run
+and puts them all on **one** local branch named after all of them — `story/<id1>_<id2>_<id3>`
+(IDs ascending) — with the generated files left **UNCOMMITTED** for you to review and commit.
+One branch means your eventual push is **one PR** for the whole sprint's Gateway work. The job
+never commits, pushes, opens a PR, or changes any ticket's state.
+
+## Multi-ticket runs
+
+The wrapper owns discovery and naming; the prompt just executes:
+
+- **Discovery** — the wrapper resolves the current sprint, runs the WIQL (`Active` + `AssignedTo = @Me`
+  + title contains `ExternalAPIGW`), fetches the titles, and appends an authoritative **Runtime inputs**
+  block to the prompt with the sprint, the ticket list, the target branch, and the branch mode. If nothing
+  is eligible it exits 0 before touching git.
+- **Branch name** — one ticket → `story/<id>`; several → `story/<id1>_<id2>_<id3>`.
+- **Branch mode** — `create` for a free name; `reuse` when the branch already exists and has *not* diverged
+  from `origin/main` (safe to continue on top); otherwise a unique `story/<ids>-2`, `-3`, … So a re-run on the
+  same ticket set continues the existing branch instead of aborting.
+- **Per-ticket isolation** — each ticket gets its own strict ADO parse, codegen, `dotnet build`, 100% line +
+  branch coverage gate, and test-case association. A ticket that fails is logged `TICKET <id> FAILED (<reason>)`
+  and the run continues; it never discards another ticket's work. A final whole-solution build catches
+  cross-ticket interference in shared files (`SISApi.API.csproj`, `PublicChangeLog.md`,
+  `DependencyInjectionExtensions.cs`).
+- **Progress** — grep the log for `===` to see per-ticket milestones, or `TICKET \d+ (READY|FAILED)` for verdicts.
+
+⚠️ **Cost and time.** Roughly **~$14 and ~23 min per ticket** (observed), so a 3-ticket sprint is ~$43 / ~70 min.
+The scheduled task allows **3 hours** (~6 tickets). That limit lives in `register-gw-task.ps1` and only takes
+effect once you **re-register the task in an elevated pwsh** (see Deploy / manage below); verify with
+`(Get-ScheduledTask -TaskName 'GW-MorningAutoPR-0700').Settings.ExecutionTimeLimit` → `PT3H`.
+
+⚠️ **The wrapper refuses to start while the previous run's `story/*` branch still has uncommitted files.**
+That is deliberate — it will not pile a new run's output onto work you haven't reviewed. Commit + push it,
+or discard it (`git checkout -- .; git clean -fd src/; git checkout main; git branch -D <branch>`), then re-run.
 
 **One ADO write** (Step 11): after the build and coverage gates pass, it associates the generated
 integration tests to their ADO Test Cases — PATCHing only the *automation fields* of **existing**

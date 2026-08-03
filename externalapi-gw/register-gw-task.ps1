@@ -86,15 +86,21 @@ $triggers = foreach ($t in $Times) {
 $userId    = "$env:USERDOMAIN\$env:USERNAME"
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 
-# Settings (mirror the PR-review tasks; 1h ceiling keeps runs inside their slot) -
+# Settings -----------------------------------------------------------------------
+# ExecutionTimeLimit is 3h because the run now processes EVERY eligible ticket in one
+# go (all on one story/<ids> branch), not one per run. Observed cost is ~23 min per
+# ticket (scaffold + build + 100% coverage gate + test-case association) plus ~5 min
+# for the post-run log review, so 3h covers roughly 6 tickets. The old 1h ceiling was
+# sized for the single-ticket policy and would have Windows kill a 3-ticket run
+# partway through, leaving a half-generated working tree on the branch.
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    -ExecutionTimeLimit (New-TimeSpan -Hours 3)
 
-$description = "sis-externalapi Gateway: generate endpoints (LOCAL branch + code, left UNCOMMITTED for review) for Active sprint user stories. No commit/push/PR/ADO writes. Weekdays 07:00."
+$description = "sis-externalapi Gateway: generate endpoints (LOCAL branch + code, left UNCOMMITTED for review) for ALL Active sprint user stories, on one story/<ids> branch. No commit/push/PR/ADO writes. Weekdays 07:00."
 
 Register-ScheduledTask -TaskName $TaskName `
     -Action $action -Trigger $triggers -Principal $principal -Settings $settings `

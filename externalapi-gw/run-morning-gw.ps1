@@ -171,6 +171,23 @@ ORDER BY [System.Id] ASC
     }
     Write-Log ("Eligible '$TitleMarker' ticket(s) found: {0} -- proceeding with git pre-flight." -f ($eligibleIds -join ', '))
 
+    # Pull titles/states for logging + to hand to the prompt's Runtime inputs block.
+    # ALL eligible tickets are processed this run (they share one story/<ids> branch);
+    # the old single-ticket-per-run policy is gone.
+    $tickets = @()
+    try {
+        $fields = 'System.Id,System.Title,System.State,System.WorkItemType'
+        $wiUrl  = "$OrgUrl/$AdoProject/_apis/wit/workitems?ids=$($eligibleIds -join ',')&fields=$fields&api-version=7.1"
+        $wi = Invoke-Ado -Url $wiUrl
+        $tickets = @($wi.value | ForEach-Object {
+            [pscustomobject]@{ Id = $_.id; Title = $_.fields.'System.Title'; State = $_.fields.'System.State' }
+        }) | Sort-Object Id
+    } catch {
+        Write-Log "WARN: could not fetch ticket titles (continuing with IDs only): $_"
+        $tickets = @($eligibleIds | ForEach-Object { [pscustomobject]@{ Id = $_; Title = ''; State = 'Active' } })
+    }
+    foreach ($t in $tickets) { Write-Log "  Active ticket #$($t.Id): $($t.Title)" }
+
     Write-Log "Capturing pre-run WIP snapshot (so we can verify nothing was clobbered) ..."
     $wipBefore = git status --porcelain 2>&1
     Write-Log ("WIP before:`n" + ($wipBefore -join "`n"))
@@ -201,11 +218,23 @@ ORDER BY [System.Id] ASC
         $currentBranch = 'main'
     }
 
+    # main is the branch we generate off, so a failure to fetch it stays FATAL.
     Write-Log "Fetching origin/main ..."
     git fetch origin main 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
     if ($LASTEXITCODE -ne 0) {
         Write-Log "FATAL: git fetch origin main failed (exit=$LASTEXITCODE)"
         exit 1
+    }
+
+    # Separately refresh refs/remotes/origin/story/* so the branch-name resolution below
+    # can decide create-vs-reuse-vs-unique against the real remote state. Best-effort:
+    # a wide fetch is more prone to transient ref-lock failures, and a stale story ref
+    # only costs us a needlessly-unique branch name -- never a wrong base commit.
+    Write-Log "Refreshing remote story/* refs (prune, best-effort) ..."
+    git fetch --prune origin '+refs/heads/story/*:refs/remotes/origin/story/*' 2>&1 |
+        ForEach-Object { Write-Log "[git fetch story] $_" }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "WARN: story/* ref refresh failed (exit=$LASTEXITCODE) -- branch resolution will use cached refs."
     }
 
     if ($currentBranch -ne 'main') {
@@ -223,12 +252,86 @@ ORDER BY [System.Id] ASC
         Write-Log "WARN: ff-merge failed; main may already be up-to-date or have local commits. Continuing."
     }
 
+    # ---- resolve the ONE branch that carries every ticket this run --------------
+    # Single ticket -> story/<id>; multiple -> story/<id1>_<id2>_... (IDs ascending).
+    # All eligible tickets share this branch so the user's eventual push is ONE PR.
+    #
+    # If the desired name is taken, REUSE it when that is safe -- i.e. it has not
+    # genuinely diverged from origin/main (one is still an ancestor of the other), so
+    # adding work / merging origin/main cannot conflict. On true divergence, or when
+    # only a remote branch of that name exists, fall back to story/<ids>-2, -3, ... so
+    # we never clobber or fight an existing branch. Claude performs the actual
+    # checkout/switch per the mode (see the prompt's "Get onto the target branch" step).
+    function Test-RefExists {
+        param([string]$ref)
+        git rev-parse --verify --quiet $ref > $null 2>&1
+        return ($LASTEXITCODE -eq 0)
+    }
+    function Test-BranchTaken {
+        param([string]$name)
+        return ((Test-RefExists "refs/heads/$name") -or (Test-RefExists "refs/remotes/origin/$name"))
+    }
+    function Get-UniqueBranch {
+        param([string]$base)
+        $n = 2
+        while (Test-BranchTaken "$base-$n") { $n++ }
+        return "$base-$n"
+    }
+
+    $desired    = 'story/' + ($eligibleIds -join '_')
+    $branchName = $desired
+    $branchMode = 'create'   # 'create' = fresh branch off origin/main; 'reuse' = continue on existing
+    Write-Log "Desired branch: $desired  (tickets: $($eligibleIds -join ', '))"
+
+    if (Test-RefExists "refs/heads/$desired") {
+        git merge-base --is-ancestor "refs/heads/$desired" origin/main 2>$null; $branchInMain = ($LASTEXITCODE -eq 0)
+        git merge-base --is-ancestor origin/main "refs/heads/$desired" 2>$null; $mainInBranch = ($LASTEXITCODE -eq 0)
+        if ($branchInMain -or $mainInBranch) {
+            $branchName = $desired
+            $branchMode = 'reuse'
+            Write-Log "Branch '$desired' exists and has not diverged from origin/main -- REUSING it (continue work on top)."
+        } else {
+            $branchName = Get-UniqueBranch $desired
+            $branchMode = 'create'
+            Write-Log "Branch '$desired' has diverged from origin/main (conflict risk) -- creating UNIQUE branch '$branchName' instead."
+        }
+    } elseif (Test-RefExists "refs/remotes/origin/$desired") {
+        $branchName = Get-UniqueBranch $desired
+        $branchMode = 'create'
+        Write-Log "Remote 'origin/$desired' exists but no local branch -- creating UNIQUE branch '$branchName'."
+    } else {
+        Write-Log "Branch '$desired' is free -- will create it fresh off origin/main."
+    }
+    Write-Log "Target branch: $branchName  (mode: $branchMode)"
+
+    # ---- build the ticket context block appended to the prompt -----------------
+    $ticketLines = ($tickets | ForEach-Object { "- #$($_.Id) [$($_.State)] $($_.Title)" }) -join "`n"
+    $contextBlock = @"
+
+---
+## Runtime inputs (supplied by the wrapper -- authoritative for THIS run)
+
+- ADO org/project: ``$AdoOrg`` / ``$AdoProject``  (team ``$AdoTeam``, title tag ``$TitleMarker``)
+- Current sprint: ``$iterName`` (iteration path: ``$iterPath``)
+- Target branch: ``$branchName``
+- Branch mode: ``$branchMode``  ('create' = make this fresh branch off origin/main with ``git checkout --no-track -b $branchName origin/main``, never ``-B``; 'reuse' = continue on the EXISTING branch with ``git switch $branchName`` -- do NOT reset it -- then follow the reuse/conflict handling in the "Get onto the target branch" step.)
+- Active ExternalAPIGW tickets to scaffold this run:
+$ticketLines
+
+Scaffold the endpoint for EVERY ticket above -- all on the single branch ``$branchName`` (respecting the branch mode).
+This list is authoritative: do not re-discover the eligible set, and do not drop a ticket for being "queued".
+Re-fetch each ticket's full detail from ADO before coding -- including the ``Microsoft.VSTS.TCM.SystemInfo`` (Technical Requirements) field.
+Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or open a PR.
+"@
+
     $Prompt = Get-Content $PromptFile -Raw
     # Fill path placeholders (literal .Replace — safe for Windows paths). Identity is resolved
     # inside the prompt via ADO @Me (the PAT owner), so no login substitution is needed here.
     $Prompt = $Prompt.Replace('{{REPO_ROOT}}',     $RepoRoot)
     $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}', $ScheduledDir)
     $Prompt = $Prompt.Replace('{{ENV_FILE}}',      $EnvFile)
+    # Runtime inputs go LAST so they win over anything general in the prompt body.
+    $Prompt = $Prompt + "`n" + $contextBlock
     Write-Log "Invoking claude directly in main repo (no worktree) ..."
     Write-Log "Streaming claude events to log (stream-json -> parsed). Tail with: Get-Content -Wait `"$LogFile`""
 
@@ -240,24 +343,27 @@ ORDER BY [System.Id] ASC
     # Grep `===` in the log for the clean summary view.
     # --------------------------------------------------------------------------
 
-    # Mutable tracker that records whether each milestone has fired (one-shot).
+    # Mutable tracker. Run-level milestones are one-shot booleans; anything that now
+    # happens once PER TICKET is a hashtable keyed by ticket id, so a 3-ticket run emits
+    # 3 "parsed" / "suites enumerated" / "READY" milestones instead of only the first.
     $script:milestones = @{
         AdoConnected         = $false
         GitHubConnected      = $false
         IterationFound       = $false
         TicketsQueried       = $false
-        TicketFetchStarted   = $false   # first wit_get_work_item call
-        TicketParsed         = $false   # "VIEWMODELS PARSED" emitted
-        TestSuitesStarted    = $false   # first testplan_list_test_cases call
-        TestSuitesEnumerated = $false   # "TEST SUITES ENUMERATED" emitted
+        TicketFetchStarted   = $false   # first wit_work_item call
+        TicketParsed         = @{}      # id -> $true once "VIEWMODELS PARSED" seen for it
+        TestSuitesStarted    = $false   # first testplan call
+        TestSuitesEnumerated = @{}      # id -> $true once "TEST SUITES ENUMERATED" seen
+        TicketDone           = @{}      # id -> 'READY' | 'FAILED'
         BranchCreated        = $false
         CodegenStarted       = $false   # first Write to src/...
         BuildStarted         = $false
         BuildResult          = $null   # 'success' / 'failed' / $null
         FileWriteCount       = 0
         FileWriteNextReport  = 5        # emit a "wrote N files" milestone at 5, 10, 15, ...
-        ChosenTicketId       = $null
         BranchName           = $null
+        ExpectedTickets      = $eligibleIds.Count
     }
 
     function Write-Milestone {
@@ -280,19 +386,25 @@ ORDER BY [System.Id] ASC
                         # Connection milestones are deferred to the tool_result side so we know they
                         # actually succeeded, not just that claude tried.
 
-                        # "Checking ticket..." — first call to wit_get_work_item / wit_get_work_items_for_iteration
+                        # "Checking ticket..." — the ADO MCP server now exposes CONSOLIDATED tools
+                        # (mcp__azure__work / wit_work_item / wit_query / testplan). The old
+                        # per-action names (wit_get_work_item, wit_query_by_wiql, ...) no longer
+                        # exist, so these conditions never matched. Match both shapes: the live
+                        # consolidated names, plus the legacy prefixes in case of a rollback.
                         if (-not $script:milestones.TicketFetchStarted -and
-                            ($toolName -eq 'mcp__azure__wit_get_work_item' -or
-                             $toolName -eq 'mcp__azure__wit_get_work_items_for_iteration' -or
+                            ($toolName -eq 'mcp__azure__wit_work_item' -or
+                             $toolName -eq 'mcp__azure__wit_query' -or
+                             $toolName -like 'mcp__azure__wit_get_work_item*' -or
                              $toolName -eq 'mcp__azure__wit_query_by_wiql')) {
                             $script:milestones.TicketFetchStarted = $true
-                            Write-Milestone '→' "Checking ticket(s) in current iteration..."
+                            Write-Milestone '→' "Reading ticket detail from ADO..."
                         }
 
-                        # "Checking test suites..." — first call to testplan_list_test_cases or testplan_list_test_suites
+                        # "Checking test suites..." — first testplan / wiki lookup
                         if (-not $script:milestones.TestSuitesStarted -and
-                            ($toolName -eq 'mcp__azure__testplan_list_test_cases' -or
-                             $toolName -eq 'mcp__azure__testplan_list_test_suites' -or
+                            ($toolName -eq 'mcp__azure__testplan' -or
+                             $toolName -eq 'mcp__azure__wiki' -or
+                             $toolName -like 'mcp__azure__testplan_list_*' -or
                              $toolName -eq 'mcp__azure__wiki_get_page_content')) {
                             $script:milestones.TestSuitesStarted = $true
                             Write-Milestone '→' "Checking test suites from Testing Considerations..."
@@ -300,12 +412,17 @@ ORDER BY [System.Id] ASC
 
                         if ($toolName -eq 'Bash' -and $input.command) {
                             $cmd = $input.command
-                            if ($cmd -match '^\s*git checkout -b (story/\S+)') {
+                            # Allow flags between `checkout` and `-b` -- the prompt mandates
+                            # `git checkout --no-track -b story/... origin/main`, which the old
+                            # anchored `^\s*git checkout -b` pattern could never match. `git switch`
+                            # is the reuse-mode path onto an existing branch.
+                            if ($cmd -match 'git\s+checkout\s+(?:--\S+\s+|-\S+\s+)*-b\s+(story/\S+)' -or
+                                $cmd -match 'git\s+switch\s+(?:--\S+\s+)*(story/\S+)') {
                                 $br = $Matches[1]
                                 if (-not $script:milestones.BranchCreated) {
                                     $script:milestones.BranchCreated = $true
                                     $script:milestones.BranchName    = $br
-                                    Write-Milestone '→' "Creating branch $br"
+                                    Write-Milestone '→' "On branch $br (all tickets land here)"
                                 }
                             }
                             if ($cmd -match 'dotnet\s+build' -and -not $script:milestones.BuildStarted) {
@@ -334,16 +451,37 @@ ORDER BY [System.Id] ASC
                     # to echo "TICKET {id} VIEWMODELS PARSED" and "TEST SUITES ENUMERATED" markers).
                     if ($block.type -eq 'text' -and $block.text) {
                         $txt = $block.text
-                        if (-not $script:milestones.TicketParsed -and $txt -match 'TICKET\s+(\d+)\s+VIEWMODELS PARSED') {
-                            $script:milestones.TicketParsed   = $true
-                            $script:milestones.ChosenTicketId = $Matches[1]
-                            Write-Milestone '✓' "Ticket $($Matches[1]) parsed (ViewModels OK)"
+                        # Per-ticket markers: iterate ALL matches, and de-dupe per ticket id
+                        # rather than run-wide, so every ticket reports its own progress.
+                        foreach ($mm in [regex]::Matches($txt, 'TICKET\s+(\d+)\s+VIEWMODELS PARSED')) {
+                            $tid = $mm.Groups[1].Value
+                            if (-not $script:milestones.TicketParsed.ContainsKey($tid)) {
+                                $script:milestones.TicketParsed[$tid] = $true
+                                Write-Milestone '✓' "Ticket $tid parsed (ViewModels OK)"
+                            }
                         }
-                        if (-not $script:milestones.TestSuitesEnumerated -and $txt -match 'TICKET\s+(\d+)\s+TEST SUITES ENUMERATED') {
-                            $script:milestones.TestSuitesEnumerated = $true
-                            $tcMatch = [regex]::Match($txt, 'Total:\s+(\d+)\s+test cases')
-                            $count = if ($tcMatch.Success) { $tcMatch.Groups[1].Value } else { '?' }
-                            Write-Milestone '✓' "Test suites enumerated ($count test cases mapped)"
+                        foreach ($mm in [regex]::Matches($txt, 'TICKET\s+(\d+)\s+TEST SUITES ENUMERATED')) {
+                            $tid = $mm.Groups[1].Value
+                            if (-not $script:milestones.TestSuitesEnumerated.ContainsKey($tid)) {
+                                $script:milestones.TestSuitesEnumerated[$tid] = $true
+                                # The prompt now mandates a trailing `Total: {n} test cases` line;
+                                # `(n cases` is a tolerated fallback for the older freelanced header.
+                                $tcMatch = [regex]::Match($txt, 'Total:\s+(\d+)\s+test cases')
+                                if (-not $tcMatch.Success) { $tcMatch = [regex]::Match($txt, '\((\d+)\s+cases') }
+                                $count = if ($tcMatch.Success) { $tcMatch.Groups[1].Value } else { '?' }
+                                Write-Milestone '✓' "Ticket $tid test suites enumerated ($count test cases mapped)"
+                            }
+                        }
+                        # Per-ticket completion verdict.
+                        foreach ($mm in [regex]::Matches($txt, 'TICKET\s+(\d+)\s+(READY|FAILED)')) {
+                            $tid = $mm.Groups[1].Value; $verdict = $mm.Groups[2].Value
+                            if (-not $script:milestones.TicketDone.ContainsKey($tid)) {
+                                $script:milestones.TicketDone[$tid] = $verdict
+                                $n = $script:milestones.TicketDone.Count
+                                $total = $script:milestones.ExpectedTickets
+                                Write-Milestone $(if ($verdict -eq 'READY') { '✓' } else { '✗' }) `
+                                    "Ticket $tid $verdict ($n/$total done)"
+                            }
                         }
                     }
                 }
@@ -401,10 +539,18 @@ ORDER BY [System.Id] ASC
                 $cost = $ev.total_cost_usd
                 $dur  = [math]::Round($ev.duration_ms / 1000, 1)
                 $writeCount = $script:milestones.FileWriteCount
+                $ready   = @($script:milestones.TicketDone.GetEnumerator() | Where-Object { $_.Value -eq 'READY' }).Count
+                $failed  = @($script:milestones.TicketDone.GetEnumerator() | Where-Object { $_.Value -eq 'FAILED' }).Count
+                $total   = $script:milestones.ExpectedTickets
+                $ticketSummary = "tickets: $ready READY / $failed FAILED of $total"
                 if ($sub -eq 'success') {
-                    Write-Milestone '✓' "DONE — duration ${dur}s, cost `$$cost, files written: $writeCount"
+                    Write-Milestone '✓' "DONE — duration ${dur}s, cost `$$cost, files written: $writeCount, $ticketSummary"
                 } else {
-                    Write-Milestone '✗' "FAILED — subtype=$sub, duration ${dur}s, files written: $writeCount"
+                    Write-Milestone '✗' "FAILED — subtype=$sub, duration ${dur}s, files written: $writeCount, $ticketSummary"
+                }
+                if ($script:milestones.TicketDone.Count -lt $total) {
+                    $missing = $eligibleIds | Where-Object { -not $script:milestones.TicketDone.ContainsKey("$_") }
+                    Write-Milestone '✗' ("Tickets with NO verdict (never reported READY/FAILED): {0}" -f ($missing -join ', '))
                 }
             }
         } catch {
@@ -564,9 +710,13 @@ ORDER BY [System.Id] ASC
         Write-Log "WIP preserved correctly."
     }
 
-    Write-Log "Branches created in this run (refs/heads/story/*) since fetch:"
-    git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:iso8601) %(subject)' refs/heads/story/ 2>&1 |
-        ForEach-Object { Write-Log "  $_" }
+    # Report only THIS run's branch. The old `for-each-ref refs/heads/story/` listing
+    # claimed to show branches "created in this run" but had no such filter -- it printed
+    # every story/* branch ever created (10 of them, back to May).
+    Write-Log "Target branch for this run: $branchName (mode: $branchMode, tickets: $($eligibleIds -join ', '))"
+    if ($script:milestones.BranchName -and $script:milestones.BranchName -ne $branchName) {
+        Write-Log "WARN: claude reported working on '$($script:milestones.BranchName)' but the wrapper assigned '$branchName'."
+    }
 
 } finally {
     Remove-Item -Force $LockFile -ErrorAction SilentlyContinue
