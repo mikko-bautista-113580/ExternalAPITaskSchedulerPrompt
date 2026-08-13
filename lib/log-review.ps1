@@ -29,6 +29,13 @@ function Invoke-LogReview {
     )
 
     $AutomationRepoRoot = Split-Path -Parent $ScheduledDir
+
+    # The automation folder is not necessarily the git root -- it may be a subfolder of a larger
+    # repo. `git status --porcelain` paths are always repo-root-relative, so resolve the real root
+    # and scope every query to the automation subtree.
+    $GitRoot = & git -C $AutomationRepoRoot rev-parse --show-toplevel 2>$null
+    $GitRoot = if ($GitRoot) { (Resolve-Path ($GitRoot -replace '/','\')).Path } else { $AutomationRepoRoot }
+
     $PromptFile         = Join-Path $script:LogReviewLibDir 'log-review-prompt.md'
     $ReportPath         = ($LogFile -replace '\.log$', '') + '.review.md'
     $TraceFile          = ($LogFile -replace '\.log$', '') + '.review.trace.log'
@@ -100,7 +107,7 @@ function Invoke-LogReview {
     # ---- 3. compounding guard: only auto-apply on a clean automation tree ----
     # If the automation repo already has pending (uncommitted) changes, run REPORT-ONLY so
     # unreviewed edits can't stack across back-to-back scheduled runs.
-    $pending = @(git -C $AutomationRepoRoot status --porcelain 2>$null)
+    $pending = @(git -C $GitRoot status --porcelain -- $AutomationRepoRoot 2>$null)
     $applyMode = if ($pending.Count -gt 0) { 'report-only' } else { 'apply' }
     if ($applyMode -eq 'report-only') {
         Write-RvLog "Automation tree has $($pending.Count) pending change(s) — running REPORT-ONLY (no auto-patch) to avoid compounding."
@@ -151,13 +158,13 @@ function Invoke-LogReview {
     # Any changed/added .ps1 that fails to parse is reverted so a broken script can never
     # reach the next scheduled run.
     if ($applyMode -eq 'apply') {
-        $changed = @(git -C $AutomationRepoRoot status --porcelain 2>$null)
+        $changed = @(git -C $GitRoot status --porcelain -- $AutomationRepoRoot 2>$null)
         foreach ($entry in $changed) {
             # porcelain: "XY path" (path may be quoted / renamed "old -> new")
             $path = ($entry.Substring(3)).Trim('"')
             if ($path -match '->') { $path = ($path -split '->')[-1].Trim().Trim('"') }
             if ($path -notmatch '\.ps1$') { continue }
-            $full = Join-Path $AutomationRepoRoot $path
+            $full = Join-Path $GitRoot $path
             if (-not (Test-Path $full)) { continue }
             $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($full, [ref]$null, [ref]$errs) | Out-Null
@@ -166,7 +173,7 @@ function Invoke-LogReview {
                 if ($status -match '\?\?') {
                     Remove-Item -Force $full -ErrorAction SilentlyContinue   # new file — delete
                 } else {
-                    git -C $AutomationRepoRoot checkout -- $path 2>$null      # tracked — revert
+                    git -C $GitRoot checkout -- $path 2>$null                 # tracked — revert
                 }
                 Write-RvLog "REVERTED $path — reviewer edit had $($errs.Count) parse error(s); not letting a broken script through."
             }
@@ -176,7 +183,7 @@ function Invoke-LogReview {
     if (Test-Path $ReportPath) { Write-RvLog "Report: $ReportPath" }
     else { Write-RvLog "WARN: reviewer did not produce a report at $ReportPath" }
 
-    $touched = @(git -C $AutomationRepoRoot status --porcelain 2>$null)
+    $touched = @(git -C $GitRoot status --porcelain -- $AutomationRepoRoot 2>$null)
     if ($touched.Count -gt 0 -and $applyMode -eq 'apply') {
         Write-RvLog "Uncommitted change(s) applied (review with 'git -C $AutomationRepoRoot diff'; nothing was committed)."
     }

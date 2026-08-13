@@ -73,6 +73,21 @@ code,pre,.mono{font-family:var(--mono)}
 .stat-warn .stat-num{color:var(--yellow)}
 .stat-info .stat-num{color:var(--blue)}
 
+/* Context panels — prior review activity + story alignment. Rendered only when data exists. */
+.ctx{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:20px}
+.ctx-title{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ctx-badge{font-size:10px;letter-spacing:.5px;padding:2px 8px;border-radius:20px;border:1px solid;text-transform:uppercase;font-weight:700}
+.ctx-ok{color:var(--green);border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.1)}
+.ctx-bad{color:var(--red);border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.1)}
+.ctx-neutral{color:var(--text3);border-color:var(--border)}
+.ctx ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:7px}
+.ctx li{font-size:13px;color:var(--text2);line-height:1.55}
+.ctx-sub{font-size:12px;font-weight:700;color:var(--text2);margin:14px 0 7px;text-transform:uppercase;letter-spacing:.5px}
+.ctx-sub:first-child{margin-top:0}
+.ctx-who{color:var(--text3);font-size:11px;font-family:var(--mono)}
+.ctx-note{font-size:12px;color:var(--text3);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}
+.ctx-empty{font-size:13px;color:var(--text3)}
+
 /* Sections */
 .section{background:var(--surface);border-radius:var(--radius);margin-bottom:14px;border:1px solid var(--border);overflow:hidden}
 .sec-header{padding:15px 20px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:12px;font-weight:600;font-size:14px}
@@ -168,6 +183,68 @@ code,pre,.mono{font-family:var(--mono)}
   var s = data.summary || {total:0,errors:0,warnings:0,info:0,recommendation:'',recommendationClass:'approve'};
   var rm = recMeta[s.recommendationClass] || recMeta.approve;
   var findings = data.findings || [];
+
+  // ---- CI status: an extra meta-item. Silent when the reviewer sent no checks data. ----
+  function ciMeta(){
+    var st = data.checks_state;
+    if(!st || st === 'none') return '';
+    var cls = st === 'passing' ? 'ctx-ok' : (st === 'failing' ? 'ctx-bad' : 'ctx-neutral');
+    return '<div class="meta-item"><div class="meta-label">CI</div>'
+         + '<div class="meta-value"><span class="ctx-badge '+cls+'">'+esc(st)+'</span> '
+         + esc(data.checks_summary||'')+'</div></div>';
+  }
+
+  // ---- Prior review activity: what a human or bot already flagged, before this report. ----
+  function priorPanel(){
+    var pa = data.prior_activity;
+    if(!pa || !pa.length) return '';
+    var open = pa.filter(function(p){ return !p.resolved; }).length;
+    var out = '<div class="ctx"><div class="ctx-title">Prior review activity'
+            + '<span class="ctx-badge ctx-neutral">'+pa.length+' comment'+(pa.length===1?'':'s')+'</span>'
+            + (open ? '<span class="ctx-badge ctx-bad">'+open+' unresolved</span>' : '')
+            + '</div><ul>';
+    pa.forEach(function(p){
+      var where = p.file ? esc(p.file)+(p.line?':'+esc(p.line):'') : 'general';
+      out += '<li><span class="ctx-who">'+esc(p.author||'?')+'</span> &middot; '
+           + '<span class="ctx-who">'+where+'</span><br>'+esc(p.gist||'')
+           + (p.resolved ? ' <span class="ctx-badge ctx-ok">resolved</span>' : '')+'</li>';
+    });
+    out += '</ul><div class="ctx-note">These were raised before this review ran. Findings below '
+         + 'deliberately exclude points already made here &mdash; this report is the second reader, '
+         + 'not the first.</div></div>';
+    return out;
+  }
+
+  // ---- Story alignment: informational only. Never affects the recommendation above. ----
+  function storyPanel(){
+    var sa = data.story_alignment;
+    if(!sa) return '';
+    var badge = {found:'ctx-ok','minimal-details':'ctx-neutral','not-found':'ctx-neutral',skipped:'ctx-neutral'}[sa.status]||'ctx-neutral';
+    var out = '<div class="ctx"><div class="ctx-title">Story alignment'
+            + (sa.id ? '<span class="ctx-badge ctx-neutral">AB#'+esc(sa.id)+'</span>' : '')
+            + '<span class="ctx-badge '+badge+'">'+esc(sa.status||'unknown')+'</span>'
+            + '</div>';
+    if(sa.title) out += '<div class="ctx-empty" style="margin-bottom:12px">'+esc(sa.title)+'</div>';
+    var m = sa.matches||[], d = sa.differences||[];
+    if(!m.length && !d.length){
+      out += '<div class="ctx-empty">No comparison available for this PR.</div>';
+    } else {
+      if(m.length){
+        out += '<div class="ctx-sub">Matches the ticket</div><ul>';
+        m.forEach(function(x){ out += '<li>'+esc(x)+'</li>'; });
+        out += '</ul>';
+      }
+      if(d.length){
+        out += '<div class="ctx-sub">Differs from the ticket</div><ul>';
+        d.forEach(function(x){ out += '<li>'+esc(x)+'</li>'; });
+        out += '</ul>';
+      }
+    }
+    out += '<div class="ctx-note">Informational only &mdash; differences are <b>not</b> defects and do '
+         + 'not affect the recommendation above. Implementation often diverges from the ticket during '
+         + 'refinement.</div></div>';
+    return out;
+  }
   var files = data.files || [];
   var h = '';
 
@@ -180,6 +257,7 @@ code,pre,.mono{font-family:var(--mono)}
      +   '<div class="meta-item"><div class="meta-label">Branch</div><div class="meta-value">'+esc(data.pr_head)+' &rarr; '+esc(data.pr_base)+'</div></div>'
      +   '<div class="meta-item"><div class="meta-label">Changes</div><div class="meta-value"><span class="add">+'+esc(data.additions)+'</span> <span class="del">-'+esc(data.deletions)+'</span> in '+esc(data.changed_files_count)+' files</div></div>'
      +   '<div class="meta-item"><div class="meta-label">Head SHA</div><div class="meta-value mono">'+esc(data.head_sha)+'</div></div>'
+     +   ciMeta()
      +   '<div class="meta-item"><div class="meta-label">Link</div><div class="meta-value"><a href="'+esc(data.pr_url)+'" target="_blank" rel="noopener">View on GitHub &rarr;</a></div></div>'
      + '</div></div>';
 
@@ -208,6 +286,10 @@ code,pre,.mono{font-family:var(--mono)}
      + '<div class="stat stat-warn"><div class="stat-num">'+esc(s.warnings)+'</div><div class="stat-label">Warnings</div></div>'
      + '<div class="stat stat-info"><div class="stat-num">'+esc(s.info)+'</div><div class="stat-label">Info</div></div>'
      + '</div>';
+
+  // Context: what was already said, and what the ticket asked for. Both self-suppress when absent.
+  h += priorPanel();
+  h += storyPanel();
 
   // Findings grouped by category
   if(findings.length === 0){

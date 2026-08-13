@@ -1,0 +1,306 @@
+{
+  "_comment": "Machine-readable AI roadmaps behind the progress artifact. The wrapper (run-progress-audit.ps1) uses ONLY the dates here to compute each team's EXPECTED phase on the trigger date; the prompt judges ACTUAL position against the exit criteria. Edit this file when a roadmap changes - never hard-code dates in the prompt or wrapper.",
+
+  "artifact": {
+    "url": "https://claude.ai/code/artifact/43208fc4-a808-448d-80ce-066b61f67b93",
+    "title": "AI & Agentic Progress - Planning with Leads",
+    "_pointsNote": "Fallback only. Points per phase are resolved PER TEAM: an explicit team-level pointsPerPhase wins, else 100 divided by that team's own phase count. A score always means 'percent of your own plan', so two teams on the same number are NOT necessarily at the same maturity.",
+    "pointsPerPhase": 20
+  },
+
+  "teams": [
+    {
+      "team": "IMPACT",
+      "lead": "Leo",
+      "_anchorNote": "IMPACT states relative weeks, not dates. anchorDate = the Monday of roadmap week 1. DEFAULTED to the page's first checkpoint - CONFIRM WITH LEO. A wrong anchor shifts every expected-phase calculation for this team.",
+      "anchorDate": "2026-07-21",
+      "anchorConfirmed": false,
+      "skillsPath": ".claude/Impact",
+      "phases": [
+        {
+          "n": 1,
+          "name": "Discovery and prioritisation",
+          "weekStart": 1,
+          "weekEnd": 1,
+          "exit": [
+            "prioritised backlog of AI skills agreed",
+            "problem statement + expected benefit per shortlisted skill",
+            "initial owners identified"
+          ]
+        },
+        {
+          "n": 2,
+          "name": "Standards and priority skill delivery",
+          "weekStart": 2,
+          "weekEnd": 10,
+          "exit": [
+            "skill structure, naming convention and documentation format written down",
+            "trigger / no-trigger conditions documented per skill",
+            "definition of done agreed",
+            "lightweight test approach in place",
+            "skills consolidated into one shared library",
+            "migrated to the latest NBS AI sandbox repository",
+            "weekly skill review session running"
+          ],
+          "backlogSize": 11
+        },
+        {
+          "n": 3,
+          "name": "Optimisation",
+          "weekStart": 10,
+          "weekEnd": 12,
+          "exit": [
+            "quality and cost baseline for high-use skills",
+            "regression tests for issues found in real usage",
+            "expensive skills optimised or justified",
+            "duplicate / low-value skills merged, revised or retired"
+          ]
+        },
+        {
+          "n": 4,
+          "name": "Composable workflows",
+          "weekStart": 12,
+          "weekEnd": 18,
+          "exit": [
+            "each candidate workflow tested on realistic examples",
+            "approval step on any external write action",
+            "duplicate protection and fallback when a skill fails"
+          ]
+        },
+        {
+          "n": 5,
+          "name": "Full orchestration",
+          "weekStart": 19,
+          "weekEnd": null,
+          "exit": [
+            "Teams / @ImpactBot spike has a documented go or no-go",
+            "at least one end-to-end workflow piloted",
+            "external writes require approval with audit and duplicate protection",
+            "agreement on whether automated code-review fixes proceed"
+          ]
+        }
+      ]
+    },
+
+    {
+      "team": "QUICKPAY",
+      "lead": "Luis Mance",
+      "_anchorNote": "QUICKPAY states relative weeks and months. anchorDate DEFAULTED to the page's first checkpoint - CONFIRM WITH LUIS. 'Month 2' is mapped to weeks 7-13 and 'Month 3+' to week 14 onward; correct those windows here if the team reads them differently.",
+      "anchorDate": "2026-07-21",
+      "anchorConfirmed": false,
+      "skillsPath": null,
+      "_skillsPathNote": "No QUICKPAY folder found in this repo. Skill-count evidence is skipped for this team until a path is filled in.",
+      "phases": [
+        {
+          "n": 1,
+          "name": "Individual skill creation",
+          "weekStart": 1,
+          "weekEnd": 1,
+          "exit": [
+            "every team member has shipped and merged at least one working skill"
+          ]
+        },
+        {
+          "n": 2,
+          "name": "Shared library & standards",
+          "weekStart": 2,
+          "weekEnd": 3,
+          "exit": [
+            "single source of truth for skills exists",
+            "duplicates removed and naming standardised",
+            "weekly skill-review session running",
+            "contribution and review norms written down",
+            "a new hire can find and use the library without asking"
+          ]
+        },
+        {
+          "n": 3,
+          "name": "Composable workflows",
+          "weekStart": 4,
+          "weekEnd": 6,
+          "exit": [
+            "2-3 multi-step workflows running end to end",
+            "connector integrations reading and writing real project state",
+            "before/after metrics captured"
+          ]
+        },
+        {
+          "n": 4,
+          "name": "Multi-agent & automated pipelines",
+          "weekStart": 7,
+          "weekEnd": 13,
+          "exit": [
+            "at least one pipeline runs with minimal manual intervention",
+            "explicit human-approval gate before anything irreversible"
+          ]
+        },
+        {
+          "n": 5,
+          "name": "Full orchestration",
+          "weekStart": 14,
+          "weekEnd": null,
+          "exit": [
+            "skills versioned, tested and evaluated like code",
+            "skill-first is the default for new work",
+            "cross-team discovery and reuse",
+            "metrics feed back into refine / merge / retire"
+          ]
+        }
+      ]
+    },
+
+    {
+      "team": "benefitED",
+      "lead": "Russell Lansang",
+      "_anchorNote": "benefitED states explicit calendar windows, so no anchorDate is needed and none should be added.",
+      "anchorDate": null,
+      "anchorConfirmed": true,
+      "skillsPath": ".claude/BenefitEd",
+      "repos": ["BenefitEd2023 (V1)", "ESA (V2)"],
+      "members": ["Russell", "Iris", "Darlene", "Xela"],
+      "phases": [
+        {
+          "n": 1,
+          "name": "Individual skill creation",
+          "start": null,
+          "end": "2026-08-07",
+          "exit": [
+            "every member has built at least one working skill"
+          ]
+        },
+        {
+          "n": 2,
+          "name": "Shared library & standards",
+          "start": "2026-08-10",
+          "end": "2026-08-28",
+          "exit": [
+            "every personal skill inventoried across the four members",
+            "pre-flight-engineering, ui-env-compare and ui-regression-compare committed",
+            ".claude/skills/README.md contribution guide written",
+            "every member has at least one merged team skill",
+            "duplicates merged and dead skills retired",
+            "30-minute Skill Review on the sprint calendar"
+          ],
+          "stagedSkills": ["pre-flight-engineering", "ui-env-compare", "ui-regression-compare"],
+          "committedSkills": ["ado-tasks", "pr", "release-notes"]
+        },
+        {
+          "n": 3,
+          "name": "Composable workflows",
+          "start": "2026-08-31",
+          "end": "2026-09-25",
+          "exit": [
+            "2-3 multi-step workflows running end to end",
+            "before/after metrics captured for at least 3 tasks"
+          ],
+          "milestones": [
+            { "date": "2026-09-04", "what": "workflow candidates chosen and written up" },
+            { "date": "2026-09-18", "what": "2 chained workflows running end to end" },
+            { "date": "2026-09-25", "what": "baseline vs current metrics captured" }
+          ]
+        },
+        {
+          "n": 4,
+          "name": "Multi-agent & automated pipelines",
+          "start": "2026-09-28",
+          "end": "2026-10-30",
+          "exit": [
+            "at least one pipeline runs with minimal manual intervention",
+            "explicit human-approval gate before anything irreversible"
+          ],
+          "milestones": [
+            { "date": "2026-10-09", "what": "first subagent pattern in use by two members" },
+            { "date": "2026-10-23", "what": "one CI-triggered skill check on PRs" },
+            { "date": "2026-10-30", "what": "one scheduled pipeline weekly with an approval gate" }
+          ]
+        },
+        {
+          "n": 5,
+          "name": "Full orchestration",
+          "start": "2026-11-02",
+          "end": "2026-12-18",
+          "exit": [
+            "skill regression tests running in CI",
+            "library published for cross-team discovery",
+            "baseline-vs-now numbers at the Q4 retro"
+          ],
+          "milestones": [
+            { "date": "2026-11-20", "what": "skill regression tests running in CI" },
+            { "date": "2026-12-04", "what": "library published for cross-team discovery" },
+            { "date": "2026-12-18", "what": "Q4 retro with baseline-vs-now numbers" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "team": "FAM",
+      "lead": "Mel Labio",
+      "title": "FAM AI Orchestration Roadmap",
+      "division": "Gemini, Grant and Aid (nbsdev)",
+      "source": "https://claude.ai/code/artifact/0829b8fe-2247-44ed-a236-16816e12f57b",
+      "_anchorNote": "FAM states explicit calendar windows and sprint numbers, so no anchorDate is needed.",
+      "anchorDate": null,
+      "anchorConfirmed": true,
+      "skillsPath": null,
+      "_skillsPathNote": "FAM's skills live in the DocumentEntry repo, not in ai-resources. No folder here to count, so skill-count evidence is skipped; progress comes from trigger notes and the ADO item count in the roadmap.",
+      "_pointsNote": "TWO phases, not five. pointsPerPhase is 50 so a completed roadmap still reads 100%. Do not compare this number to a five-phase team's number as if they meant the same thing.",
+      "pointsPerPhase": 50,
+      "overallGoal": "Complete a skill set for AI-assisted ticket cycle workflows by mid-September, then drive adoption to establish whether the process genuinely accelerates work compared to manual approaches.",
+      "phases": [
+        {
+          "n": 1,
+          "name": "Complete the skill set",
+          "start": "2026-08-06",
+          "end": "2026-09-15",
+          "sprints": "26.17-26.19",
+          "exit": [
+            "all 10 spec skills merged",
+            "proof run of /ticket-cycle executed by team members",
+            "orchestrator has commit and PR capability"
+          ],
+          "workItems": [
+            { "what": "orchestrator with commit & PR capability", "owner": "Mel" },
+            { "what": "Karma/lint/coverage skill, re-scoped", "owner": "Dave" },
+            { "what": "sync-contracts skill", "owner": "Coleen" },
+            { "what": "MongoDB MCP server path", "owner": "Mel", "criticalPath": true },
+            { "what": "new document script design", "owner": "Dave" },
+            { "what": "documentation currency spike", "owner": "Andrew" },
+            { "what": "data issue triage", "owner": "Mel" },
+            { "what": "sprint release notes", "owner": "Coleen" }
+          ],
+          "milestones": [
+            { "date": "2026-08-18", "what": "GATE: approve the real MongoDB MCP server (Path A) over shell recipes" },
+            { "date": "2026-08-18", "what": "GATE: narrow skill #906378 to Playwright/E2E and CI reporting" },
+            { "date": "2026-08-18", "what": "GATE: assign ownership of the NuGet provider task blocking stage 4" }
+          ],
+          "statusAsOf": { "date": "2026-08-10", "shipped": 4, "tracked": 11, "builtUnmerged": ["#906373"] }
+        },
+        {
+          "n": 2,
+          "name": "Make it stick",
+          "start": "2026-09-16",
+          "end": "2026-10-27",
+          "sprints": "26.20-26.22",
+          "proposed": true,
+          "_proposedNote": "Proposed scope, NOT tracked in ADO and no owners assigned. The roadmap itself says the initiative may close on 15 Sep at the champions' discretion. Do not mark FAM 'Behind' on phase 2 while it remains untracked - report it as proposed.",
+          "exit": [
+            "each engineer has run /ticket-cycle on real tickets",
+            "baseline metrics comparing pre/post cycle times established",
+            "DocumentEntry CLAUDE.md repository briefing created",
+            "drift-guard solution implemented from spike findings",
+            "review feedback incorporated into skills",
+            "enterprise-repo orchestrator built or explicitly declined",
+            "AI champions retrospective held"
+          ]
+        }
+      ],
+      "risks": [
+        "Momentum drift - a six-sprint timeline risks deprioritisation despite deliberate slack",
+        "Phase 1 is only ~15 days of actual effort spread over six weeks",
+        "Phase 2 is untracked - wish lists lose to tracked work every time",
+        "Drift: an MCP migration to action-based tools broke every existing skill's ADO calls; six files patched, two skills still broken"
+      ]
+    }
+  ]
+}

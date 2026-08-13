@@ -69,17 +69,17 @@ It is a sibling of `ms-pr-review`, but where PR-review is strictly read-only, th
    ```
 3. **Register the task** (elevated pwsh):
    ```powershell
-   pwsh -File C:\neldevsrc\Github\TaskScheduler\admission-ms\register-admission-ms-task.ps1
+   pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\admission-ms\register-admission-ms-task.ps1
    ```
 
 ## Running / testing manually
 
 ```powershell
 # Full end-to-end run right now (not via the scheduler), verbose log under logs\manual\
-pwsh -File C:\neldevsrc\Github\TaskScheduler\admission-ms\run-admission-ms.ps1 -TaskName manual
+pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\admission-ms\run-admission-ms.ps1 -TaskName manual
 
 # Register + trigger one run immediately
-pwsh -File C:\neldevsrc\Github\TaskScheduler\admission-ms\register-admission-ms-task.ps1 -RunNow
+pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\admission-ms\register-admission-ms-task.ps1 -RunNow
 
 # Cheaper/faster model
 pwsh -File ...\run-admission-ms.ps1 -TaskName manual -Model sonnet
@@ -93,7 +93,7 @@ pwsh -File ...\register-admission-ms-task.ps1 -Unregister
 - **Log:** newest file in `logs\<TaskName>\`. Grep `===` for milestones (sprint resolved, branch,
   build result, DONE). Tail live:
   ```powershell
-  Get-ChildItem "C:\neldevsrc\Github\TaskScheduler\admission-ms\logs\AdmissionMS-EndpointGen" |
+  Get-ChildItem "C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\admission-ms\logs\AdmissionMS-EndpointGen" |
     Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait $_.FullName }
   ```
 - **Test-case association:** grep the log for `ASSOCIATE` — one line per feature, either
@@ -162,6 +162,18 @@ title/description. (The 2026-07-15 run fetched only Description + Acceptance Cri
   suite, and map test-case titles → methods. Fallbacks: `TestedBy` relations, then a "Test Cases" child
   task's comments. If nothing is linked for a scenario, use the literal **`[TestCaseId("000")]`** — never
   an invented or sequential ID.
+- **ViewModels names the field, the schema sizes it** — the System Info field list is authoritative for
+  *which* properties exist, their names, and nullability, but **not** for numeric width. The DTO's scalar
+  types mirror the real column / EF entity (`tinyint → byte`, `smallint → short`, …), and the same type is
+  carried into the `<Feature>DtoTm`, the faker casts, and unit-test assertion casts. (PR #3273: ViewModels
+  said `SchoolSortOrder [short]`, the column is `tinyint`/EF `byte?`; the `byte? → short?` projection is
+  lossless so it built and tested green, and review caught it against the architecture doc's §13
+  ADO ↔ DTO ↔ EF type-match rule. `*.verified.txt` snapshots are unaffected by a width fix.)
+- **Expression-bodied ("lambda") members in new files** — single-expression bodies are generated as
+  `=> …` rather than braced blocks; the recurring gap was the API-test helper constructor
+  (`public <Feature>Helper(AdmissionsContext context) => _context = context;`), which the user was
+  hand-converting after each run. Applies to every helper in a slice, and never to the pre-existing
+  block-bodied ones (reformatting merged files is still out of bounds).
 - **`ConfigSchoolId` is DTO-only** — never added as an EF Model column; it's projected through the
   entity's navigation chain (null-safe, `(short)0` fallback), e.g. `e.OA.ConfigSchool.ConfigSchoolID`.
   If an entity has **no** navigation path to `ConfigSchool`, `ConfigSchoolId` is **omitted from the DTO

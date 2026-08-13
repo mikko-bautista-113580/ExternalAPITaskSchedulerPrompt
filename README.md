@@ -1,11 +1,15 @@
 # ExternalAPI Task Scheduler Prompts
 
+> Lives at `C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\`. Everything below is relative to
+> that folder — it is the root the jobs resolve `lib\`, `team-roster.json`, and
+> `config.local.json` against.
+
 A collection of **headless Claude Code automations** run as Windows scheduled tasks against the
 SIS External API codebases. Each subfolder is a self-contained job: a PowerShell wrapper that
 launches `claude` headless on a prompt, a Markdown prompt (the "engine"), a register script that
 creates/removes the Windows scheduled task, and per-run logs.
 
-The four jobs fall into two families:
+The five jobs fall into three families:
 
 - **Endpoint generators** — read the Active sprint in Azure DevOps and write a working endpoint to
   a local `story/<id>` branch, left **uncommitted** for you to review and commit. They never
@@ -14,8 +18,10 @@ The four jobs fall into two families:
   report per PR. They are **strictly read-only** on GitHub and on your working tree; nothing is
   posted unless *you* click a button in the report. They review **your teammates' PRs — the team
   roster minus you** (see [Configuration](#configuration)).
+- **Reporters** — read *this* repo plus a published page and write the page back. They target no
+  code repo at all and never mutate anything under version control.
 
-All four jobs **auto-detect whoever runs them** — no per-user edits. Endpoint generators build for
+All four code-facing jobs **auto-detect whoever runs them** — no per-user edits. Endpoint generators build for
 your own ADO stories (`@Me`); PR reviewers detect your GitHub login (`gh api user -q .login`) and
 review everyone else on the team. So Paul's checkout reviews Mikko + Junie, Junie's reviews Paul +
 Mikko, and so on.
@@ -28,6 +34,7 @@ Mikko, and so on.
 | [admission-ms/](admission-ms/) | `AdmissionMS-EndpointGen` | Endpoint generator (writes local branch) | `sis-services` (Admissions) | Uncommitted `story/<id>` branch |
 | [gw-pr-review/](gw-pr-review/) | `GW-PRReview` | PR review (read-only → HTML) | `sis-externalapi` | `Downloads\PR Review\` |
 | [ms-pr-review/](ms-pr-review/) | `MS-PRReview` | PR review (read-only → HTML) | `sis-services` | `Downloads\PR Review MS\` |
+| [progress-audit/](progress-audit/) | `AIProgress-Audit` | Reporter (gated publish → artifact) | none — reads `.claude\**` | AI progress artifact + `Downloads\AI Progress Audit\` |
 
 Each folder has its own README with full setup, tuning, and troubleshooting:
 
@@ -35,6 +42,7 @@ Each folder has its own README with full setup, tuning, and troubleshooting:
 - [admission-ms/README-admission-ms.md](admission-ms/README-admission-ms.md)
 - [gw-pr-review/README-pr-review.md](gw-pr-review/README-pr-review.md)
 - [ms-pr-review/README-ms-pr-review.md](ms-pr-review/README-ms-pr-review.md)
+- [progress-audit/README-progress-audit.md](progress-audit/README-progress-audit.md)
 
 ## Anatomy of a job
 
@@ -62,7 +70,8 @@ See each job's README for the exact one-time setup.
 ## Configuration
 
 Identity and paths are resolved at runtime, so a teammate just clones and registers — no script
-edits. Three shared files at this repo root drive all four jobs:
+edits. Three shared files at this folder's root (`ExternalAPITaskSchedulerPrompt\`) drive the jobs
+(`progress-audit` uses `lib\` and `config.local.json`, but has no roster — it scores teams, not PRs):
 
 | File | Committed? | Purpose |
 |---|---|---|
@@ -75,8 +84,8 @@ The wrappers inject the resolved identity/paths into each prompt via placeholder
 
 ## Common commands
 
-Registering at the root task folder needs an **Administrator** PowerShell. Substitute the job's
-`register-*.ps1` path:
+Run these from `ExternalAPITaskSchedulerPrompt\`; registering needs an **Administrator** PowerShell.
+Substitute the job's `register-*.ps1` path:
 
 ```powershell
 # register the task (and optionally fire one run immediately)
@@ -106,9 +115,9 @@ path mismatches, wasted rebuild cycles, `WARN`/`FATAL` lines, etc. — **validat
 the current source, and writes a markdown report next to the log
 (`logs/<TaskName>/<TaskName>_<timestamp>.review.md`, git-ignored, last 30 kept).
 
-- **It never commits.** Validated fixes are applied as **uncommitted** edits to this repo's own
-  files (`*.ps1`, `*-prompt.md`, `*-standards.md`, `*-template.html`); you review `git diff` and
-  commit. It never runs `git add`/`commit`/`push` and never touches the target repos.
+- **It never commits.** Validated fixes are applied as **uncommitted** edits confined to this
+  folder's own files (`*.ps1`, `*-prompt.md`, `*-standards.md`, `*-template.html`); you review
+  `git diff` and commit. It never runs `git add`/`commit`/`push` and never touches the target repos.
 - **It never stacks unreviewed edits.** If the automation tree already has pending changes, the
   reviewer degrades to **report-only** (recommends, changes nothing) so edits can't compound
   across back-to-back scheduled runs.
@@ -126,9 +135,14 @@ the current source, and writes a markdown report next to the log
   un-reviewed work is never clobbered.
 - **PR reviewers are read-only:** only `gh` read subcommands / GET, no working-tree writes beyond
   the HTML reports. Findings are posted to GitHub only when you click a button in the report.
+- **Reporters publish behind a gate:** `progress-audit` updates the AI progress artifact only when
+  no score regresses and no roadmap phase is overdue; anything else drops to draft-and-report with a
+  `HOLD` in the log. It never edits this repo — roadmap changes are always a human edit to
+  `progress-audit\roadmaps.json`.
 
 > **Note on paths:** the wrappers resolve the scheduler folder from their own location
 > (`$PSScriptRoot`) and target-repo / output / `.env` paths from `config.local.json` (see
 > [Configuration](#configuration)), so a checkout works from wherever you clone it. Any absolute
 > path still shown in a per-job README is illustrative — the defaults resolve under your
-> `%USERPROFILE%` unless you override them.
+> `%USERPROFILE%` unless you override them. The job folders must stay **siblings of `lib\`**;
+> that relative layout is what `$PSScriptRoot\..\lib\team.ps1` depends on.

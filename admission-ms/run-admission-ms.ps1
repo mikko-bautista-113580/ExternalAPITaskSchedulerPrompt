@@ -187,7 +187,9 @@ ORDER BY [System.Id] ASC
     # (the user reviews + commits). So if you have not yet committed/stashed that
     # work, the tree is dirty and this run correctly aborts rather than clobber it.
     $branchBefore = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
-    $dirty = (git status --porcelain 2>&1 | Out-String).Trim()
+    # TrimEnd (not Trim): porcelain lines are ' M path' for unstaged edits, and a leading-space strip
+    # on the first line makes it read as 'M path' (staged) in the log.
+    $dirty = (git status --porcelain 2>&1 | Out-String).TrimEnd()
     if ($dirty) {
         Write-Milestone 'X' "ABORT: working tree is dirty on '$branchBefore' -- refusing to touch it. Review/commit/stash and re-run."
         Write-Log "Uncommitted changes:`n$dirty"
@@ -196,8 +198,45 @@ ORDER BY [System.Id] ASC
     Write-Log "Working tree clean. Current branch: $branchBefore"
 
     Write-Log "Fetching origin (prune) ..."
-    git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
-    if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- continuing on cached refs." }
+    # Fetch helper: logs the interesting output but collapses the '- [deleted]' prune lines into a
+    # single count (this repo prunes 100+ refs per run, which drowned the rest of the log).
+    function Invoke-GitFetchPrune {
+        $out     = git fetch --prune origin 2>&1
+        $code    = $LASTEXITCODE
+        $deleted = 0
+        foreach ($l in $out) {
+            if ("$l" -match '^\s*-\s*\[deleted\]') { $deleted++ } else { Write-Log "[git fetch] $l" }
+        }
+        if ($deleted -gt 0) { Write-Log "[git fetch] pruned $deleted deleted remote ref(s)." }
+        return $code
+    }
+    # Ref-deletion is TRANSACTIONAL: a single un-acquirable '<ref>.lock' aborts the whole prune, so a
+    # blind retry replays the identical failure. Observed 2026-08-12: both passes reported the same
+    # lock ('refs/remotes/origin/bug/295788-duplicate-oa-cc-sda.lock') and the same 112 refs left
+    # unpruned, i.e. the leftover lock is STALE (a crashed/killed earlier git), not self-clearing.
+    # Clear only demonstrably-stale locks: '*.lock' under .git/refs/remotes/origin older than 10 min.
+    # A lock a live git just created is younger than that and is left alone (retry then behaves as
+    # before, and the log says which case it was). These shadow remote-tracking refs only -- the very
+    # next fetch regenerates them; nothing under the working tree is touched.
+    function Clear-StaleRefLocks {
+        $refDir = Join-Path $RepoRoot '.git\refs\remotes\origin'
+        if (-not (Test-Path $refDir)) { Write-Log "[git fetch] no refs/remotes/origin dir -- skipping stale-lock sweep."; return }
+        $cutoff = (Get-Date).AddMinutes(-10)
+        $stale  = @(Get-ChildItem -LiteralPath $refDir -Filter '*.lock' -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -lt $cutoff })
+        if ($stale.Count -eq 0) { Write-Log "[git fetch] no stale (>10 min) ref locks under refs/remotes/origin -- leaving them alone."; return }
+        foreach ($f in $stale) {
+            Write-Log "[git fetch] removing stale ref lock (age $([math]::Round(((Get-Date) - $f.LastWriteTime).TotalHours,1))h): $($f.FullName)"
+            Remove-Item -Force -LiteralPath $f.FullName -ErrorAction SilentlyContinue
+        }
+    }
+    $fetchExit = Invoke-GitFetchPrune
+    if ($fetchExit -ne 0) {
+        Write-Log "WARN: git fetch failed (exit=$fetchExit) -- clearing stale ref locks and retrying once."
+        Clear-StaleRefLocks
+        $fetchExit = Invoke-GitFetchPrune
+    }
+    if ($fetchExit -ne 0) { Write-Log "WARN: git fetch still failing (exit=$fetchExit) -- continuing on cached refs." }
 
     # ---- resolve a usable branch: REUSE the existing one if safe, else a UNIQUE new one ----
     # Policy (replaces the old "branch exists -> skip"): if the desired branch already exists,
@@ -271,25 +310,29 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
     # ---- launch claude -----------------------------------------------------
     $script:m = @{ AdoSeen=$false; GitSeen=$false; BuildSeen=$false; Generated=0; BuildOk=$null; AgentsDispatched=0 }
 
+    # NOTE: the parameter is $toolInput, NOT $input. `$input` is a PowerShell automatic variable
+    # (the pipeline enumerator) and it silently shadows a same-named parameter -- the bound value
+    # is replaced by an EMPTY, non-null enumerator, so every summary logged as a bare
+    # "PowerShell: " / "Read: " with the arguments stripped. Do not rename it back.
     function Format-ToolUseSummary {
-        param($name, $input)
-        if ($null -eq $input) { return "$name (no input)" }
+        param($name, $toolInput)
+        if ($null -eq $toolInput) { return "$name (no input)" }
         switch ($name) {
-            'Bash'       { return "Bash: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'PowerShell' { return "PowerShell: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'Read'       { return "Read: $($input.file_path)" }
-            'Write'      { return "Write: $($input.file_path)" }
-            'Edit'       { return "Edit: $($input.file_path)" }
-            'Glob'       { return "Glob: $($input.pattern)" }
-            'Grep'       { return "Grep: $($input.pattern)" }
-            'TodoWrite'  { return "TodoWrite: $((($input.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
+            'Bash'       { return "Bash: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'PowerShell' { return "PowerShell: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'Read'       { return "Read: $($toolInput.file_path)" }
+            'Write'      { return "Write: $($toolInput.file_path)" }
+            'Edit'       { return "Edit: $($toolInput.file_path)" }
+            'Glob'       { return "Glob: $($toolInput.pattern)" }
+            'Grep'       { return "Grep: $($toolInput.pattern)$(if ($toolInput.path) { " in $($toolInput.path)" })$(if ($toolInput.glob) { " (glob=$($toolInput.glob))" })" }
+            'TodoWrite'  { return "TodoWrite: $((($toolInput.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
             { $_ -eq 'Agent' -or $_ -eq 'Task' } {
-                $sub = if ($input.subagent_type) { $input.subagent_type } else { 'agent' }
-                $desc = if ($input.description) { $input.description } elseif ($input.prompt) { ($input.prompt -replace '\s+', ' ') -replace '^(.{0,100}).*', '$1' } else { '' }
+                $sub = if ($toolInput.subagent_type) { $toolInput.subagent_type } else { 'agent' }
+                $desc = if ($toolInput.description) { $toolInput.description } elseif ($toolInput.prompt) { ($toolInput.prompt -replace '\s+', ' ') -replace '^(.{0,100}).*', '$1' } else { '' }
                 return "Agent[$sub]: $desc"
             }
             default {
-                $json = ($input | ConvertTo-Json -Compress -ErrorAction SilentlyContinue) -replace '\s+', ' '
+                $json = ($toolInput | ConvertTo-Json -Compress -ErrorAction SilentlyContinue) -replace '\s+', ' '
                 if ($json.Length -gt 200) { $json = $json.Substring(0, 200) + '...' }
                 return "$name $json"
             }
@@ -302,7 +345,12 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
             ($content | ForEach-Object { if ($_.type -eq 'text') { $_.text } else { ($_ | ConvertTo-Json -Compress) } }) -join ' '
         } elseif ($content -is [string]) { $content } else { $content | ConvertTo-Json -Compress }
         $text = $text -replace '\s+', ' '
-        if ($text.Length -gt 250) { $text = $text.Substring(0, 250) + '...' }
+        # Error text is the one thing a post-run review actually needs in full. The flat 250-char cap
+        # truncated the 2026-08-12 ADO failure to '"message": "VS4...' -- the agent burned a retry and
+        # the log could not say why. Give error-SHAPED results a wider window; everything else keeps
+        # the compact cap so the log stays readable.
+        $cap = if ($text -match 'Exception|Invoke-RestMethod:|error CS\d|VS\d{6}|fatal:|is not recognized|Command timed out') { 1200 } else { 250 }
+        if ($text.Length -gt $cap) { $text = $text.Substring(0, $cap) + '...' }
         return $text
     }
     function Track-Milestones {
@@ -368,7 +416,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
                 foreach ($block in $ev.message.content) {
                     switch ($block.type) {
                         'text'     { ($block.text -split "`r?`n") | Where-Object { $_ -ne '' } | ForEach-Object { Write-Log "[claude] $_" } }
-                        'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)" }
+                        'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -toolInput $block.input)" }
                         'thinking' { $t = ($block.thinking -replace "`r?`n", ' ').Trim(); if ($t) { if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; Write-Log "[claude:thinking] $t" } }
                         default    { Write-Log "[claude:assistant:?] $($block.type)" }
                     }
@@ -390,6 +438,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
             }
             # benign informational events -- logged plainly, no "(no formatter)" noise
             'rate_limit_event' { Write-Log "[claude:info] rate_limit_event" }
+            'tool_progress'    { Write-Log "[claude:info] tool_progress" }
             default { Write-Log "[claude:event:$($ev.type)] (no formatter)" }
         }
     }
@@ -437,7 +486,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit or push.
     $branchAfter = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
     git rev-parse --verify --quiet "refs/heads/$branchName" > $null 2>&1
     if ($LASTEXITCODE -eq 0) {
-        $changed = (git status --porcelain 2>&1 | Out-String).Trim()
+        $changed = (git status --porcelain 2>&1 | Out-String).TrimEnd()   # TrimEnd: keep the ' M' status column intact
         Write-Milestone 'v' "Branch '$branchName' created; generated files left UNCOMMITTED for your review."
         if ($branchAfter -ne $branchName) {
             Write-Milestone 'X' "NOTE: expected to be left on '$branchName' but HEAD is '$branchAfter'. Check the log."

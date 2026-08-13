@@ -7,6 +7,12 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# Under Task Scheduler (-NoProfile, no interactive console) the console decodes native-command
+# output with the OEM code page (cp437), so UTF-8 from gh/claude lands in the log as mojibake
+# ("Γ£ô" for "✓", "ΓÇö" for "—"). Force UTF-8 so the log is readable. Guarded: the setter throws
+# when no console is attached, and that must never abort the run.
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
+
 $ScheduledDir = $PSScriptRoot   # this folder — automation files live alongside the wrapper
 
 # Shared identity + path resolution (roster minus self, per-machine paths).
@@ -85,6 +91,35 @@ try {
     exit 1
 }
 
+# ---- OPTIONAL ADO credentials (story-alignment check only) ------------------
+# The review itself needs no ADO access. When ~/repos/.env supplies ADO_PAT we ALSO
+# hand the prompt the org/project so Phase 1e can read the PR's ticket and sanity-check
+# that the PR built what was asked for (read-only; informational; never blocking).
+# A missing PAT is a SUPPORTED configuration -- warn and pass empty placeholders so the
+# prompt's gate skips that phase cleanly. NEVER make this fatal: it would break every
+# existing install that has no ADO_PAT.
+$AdoOrg = ''; $AdoProject = ''
+$EnvFile = $cfg.envFile
+if (Test-Path $EnvFile) {
+    $envMap = @{}
+    Get-Content $EnvFile | ForEach-Object {
+        $t = $_.Trim()
+        if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
+            $k, $v = $t -split '=', 2
+            $envMap[$k.Trim()] = $v.Trim().Trim('"').Trim("'")
+        }
+    }
+    if ($envMap['ADO_PAT']) {
+        $AdoOrg     = if ($envMap['ADO_ORG'])     { $envMap['ADO_ORG'] }     else { 'renweb' }
+        $AdoProject = if ($envMap['ADO_PROJECT']) { $envMap['ADO_PROJECT'] } else { 'ColdFusion' }
+        Write-Log "ADO creds found -- story-alignment enabled ($AdoOrg/$AdoProject)."
+    } else {
+        Write-Log "WARN: no ADO_PAT in $EnvFile -- story-alignment check will be skipped (review is unaffected)."
+    }
+} else {
+    Write-Log "WARN: env file not found at $EnvFile -- story-alignment check will be skipped (review is unaffected)."
+}
+
 # ---- concurrency guard -----------------------------------------------------
 $LockFile = Join-Path $ScheduledDir '.pr-review.lock'
 if (Test-Path $LockFile) {
@@ -122,8 +157,22 @@ try {
     $skipClaude = $false
     try {
         # $reviewAuthors computed above (roster minus current user).
-        $openJson = gh pr list --repo nelnet-nbs/sis-externalapi --state open --limit 100 --json number,author,assignees,isDraft,updatedAt 2>$null
-        if ($LASTEXITCODE -eq 0 -and $openJson) {
+        # gh fails transiently (network stall / SSO / rate limit). A single failure here used to
+        # fall straight through to a full claude launch that then found nothing to do (~11 min,
+        # ~$0.59). Retry a few times, and keep gh's stderr instead of discarding it with 2>$null
+        # so the log says WHY the pre-check failed.
+        $openJson = $null
+        foreach ($attempt in 1..3) {
+            $ghRaw    = gh pr list --repo nelnet-nbs/sis-externalapi --state open --limit 100 --json number,author,assignees,isDraft,updatedAt 2>&1
+            $ghExit   = $LASTEXITCODE
+            $ghErr    = (@($ghRaw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) | ForEach-Object { $_.ToString() }) -join ' '
+            $openJson = (@($ghRaw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n").Trim()
+            if ($ghExit -eq 0 -and $openJson) { break }
+            Write-Log "Pre-check: 'gh pr list' attempt $attempt/3 failed (exit=$ghExit)$(if ($ghErr) { ' -- ' + $ghErr })"
+            $openJson = $null
+            if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
+        }
+        if ($openJson) {
             $openPrs = $openJson | ConvertFrom-Json
             $reviewed = @{}
             Get-ChildItem $OutputDir -Filter 'PR-*.html' -ErrorAction SilentlyContinue |
@@ -142,7 +191,7 @@ try {
                 Write-Milestone '>' "Un-reviewed candidate PR(s): $(($todo.number | Sort-Object) -join ', ')"
             }
         } else {
-            Write-Log "Pre-check: 'gh pr list' failed or returned nothing; launching claude and letting the prompt decide."
+            Write-Log "WARN: Pre-check: 'gh pr list' failed on all 3 attempts; launching claude and letting the prompt decide (a launch may be spent on nothing)."
         }
     } catch {
         Write-Log "Pre-check error (non-fatal): $_  -- launching claude anyway."
@@ -152,24 +201,28 @@ try {
     $script:m = @{ GhSeen=$false; GitSeen=$false; ReviewListSeen=$false; Reviewed=0; AgentsDispatched=0 }
     $script:TotalCostUsd = 0.0
 
+    # NOTE: the parameter is $toolInput, NOT $input. `$input` is a PowerShell automatic variable
+    # (the pipeline enumerator) and it silently shadows a same-named parameter -- the bound value
+    # is replaced by an EMPTY, non-null enumerator, so every summary logged as a bare
+    # "PowerShell: " / "Read: " with the arguments stripped. Do not rename it back.
     function Format-ToolUseSummary {
-        param($name, $input)
-        if ($null -eq $input) { return "$name (no input)" }
+        param($name, $toolInput)
+        if ($null -eq $toolInput) { return "$name (no input)" }
         switch ($name) {
-            'Bash'       { return "Bash: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'PowerShell' { return "PowerShell: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'Read'       { return "Read: $($input.file_path)" }
-            'Write'      { return "Write: $($input.file_path)" }
-            'Glob'       { return "Glob: $($input.pattern)" }
-            'Grep'       { return "Grep: $($input.pattern)" }
-            'TodoWrite'  { return "TodoWrite: $((($input.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
+            'Bash'       { return "Bash: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'PowerShell' { return "PowerShell: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'Read'       { return "Read: $($toolInput.file_path)" }
+            'Write'      { return "Write: $($toolInput.file_path)" }
+            'Glob'       { return "Glob: $($toolInput.pattern)" }
+            'Grep'       { return "Grep: $($toolInput.pattern)" }
+            'TodoWrite'  { return "TodoWrite: $((($toolInput.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
             { $_ -eq 'Agent' -or $_ -eq 'Task' } {
-                $sub = if ($input.subagent_type) { $input.subagent_type } else { 'agent' }
-                $desc = if ($input.description) { $input.description } elseif ($input.prompt) { ($input.prompt -replace '\s+', ' ') -replace '^(.{0,100}).*', '$1' } else { '' }
+                $sub = if ($toolInput.subagent_type) { $toolInput.subagent_type } else { 'agent' }
+                $desc = if ($toolInput.description) { $toolInput.description } elseif ($toolInput.prompt) { ($toolInput.prompt -replace '\s+', ' ') -replace '^(.{0,100}).*', '$1' } else { '' }
                 return "Agent[$sub]: $desc"
             }
             default {
-                $json = ($input | ConvertTo-Json -Compress -ErrorAction SilentlyContinue) -replace '\s+', ' '
+                $json = ($toolInput | ConvertTo-Json -Compress -ErrorAction SilentlyContinue) -replace '\s+', ' '
                 if ($json.Length -gt 200) { $json = $json.Substring(0, 200) + '...' }
                 return "$name $json"
             }
@@ -243,14 +296,20 @@ try {
         switch ($ev.type) {
             'system' {
                 if ($ev.subtype -eq 'init') { Write-Log "[claude:init] model=$($ev.model) cwd=$($ev.cwd) session=$($ev.session_id)" }
+                # 'thinking_tokens' is a contentless per-delta token-accounting heartbeat -- it was
+                # 122 of the 343 lines (36%) in the 2026-08-10 run, and the post-run log-review reads
+                # the whole file, so the noise costs tokens on every run. Siblings already suppress it.
+                elseif ($ev.subtype -eq 'thinking_tokens') { }
                 else { Write-Log "[claude:system] $($ev.subtype)" }
             }
             'assistant' {
                 foreach ($block in $ev.message.content) {
                     switch ($block.type) {
                         'text'     { ($block.text -split "`r?`n") | Where-Object { $_ -ne '' } | ForEach-Object { Write-Log "[claude] $_" } }
-                        'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)" }
-                        'thinking' { $t = ($block.thinking -replace "`r?`n", ' '); if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; Write-Log "[claude:thinking] $t" }
+                        'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -toolInput $block.input)" }
+                        # Redacted/empty thinking blocks carry no text -- logging them emitted 17 bare
+                        # "[claude:thinking]" lines in the 2026-08-10 run. Only log when there is text.
+                        'thinking' { $t = ($block.thinking -replace "`r?`n", ' ').Trim(); if ($t) { if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; Write-Log "[claude:thinking] $t" } }
                         default    { Write-Log "[claude:assistant:?] $($block.type)" }
                     }
                 }
@@ -271,6 +330,7 @@ try {
             }
             # benign informational events -- logged plainly, no "(no formatter)" noise
             'rate_limit_event' { Write-Log "[claude:info] rate_limit_event" }
+            'tool_progress'    { Write-Log "[claude:info] tool_progress" }
             default { Write-Log "[claude:event:$($ev.type)] (no formatter)" }
         }
     }
@@ -290,6 +350,13 @@ try {
         $Prompt = $Prompt.Replace('{{OUTPUT_DIR}}',     $OutputDir)
         $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}',  $ScheduledDir)
         $Prompt = $Prompt.Replace('{{REPO_ROOT}}',      $RepoRoot)
+        # Empty when no ADO_PAT -- the prompt's Phase 1e gate checks for exactly that.
+        $Prompt = $Prompt.Replace('{{ADO_ORG}}',        $AdoOrg)
+        $Prompt = $Prompt.Replace('{{ADO_PROJECT}}',    $AdoProject)
+        # Where the PAT actually lives. Phase 1e reads ADO_PAT out of this file itself (same pattern as
+        # the admission-ms / morning-gw prompts). Without it the agent probes $env:ADO_PAT, finds it
+        # empty, and skips story-alignment even though the wrapper just logged "ADO creds found".
+        $Prompt = $Prompt.Replace('{{ENV_FILE}}',       $EnvFile)
         try {
             $Prompt | & $ClaudeCmd `
                 --print `

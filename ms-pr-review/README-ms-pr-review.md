@@ -74,17 +74,40 @@ the scheduled task (InteractiveToken, same user) reuses them.
 Registering at the root task folder needs elevation. In an **Administrator** PowerShell 7:
 
 ```powershell
-pwsh -File "C:\neldevsrc\Github\TaskScheduler\ms-pr-review\register-ms-pr-review-task.ps1" -RunNow
+pwsh -File "C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\ms-pr-review\register-ms-pr-review-task.ps1" -RunNow
 ```
 
 `-RunNow` registers it and fires one run immediately so you can watch it. Tail the log:
 
 ```powershell
-$d = "C:\neldevsrc\Github\TaskScheduler\ms-pr-review\logs\MS-PRReview"
+$d = "C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\ms-pr-review\logs\MS-PRReview"
 Get-ChildItem $d | Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait $_.FullName }
 ```
 
 Reports land in `%USERPROFILE%\Downloads\PR Review MS\` as `PR-<number>-<slug>.html` (one per PR).
+
+## What the review takes into account
+
+Beyond the standards rulebook, each PR is read with three pieces of context — ported from the interactive
+`/sis-pdlc-plugin:p3-review-pr` skill, which had them and this job didn't:
+
+| Input | Why | Where it shows |
+|---|---|---|
+| **Prior review activity** — existing comment threads, human and bot (CodeRabbit et al.) | Stops the report restating something already said. Reviewers are told not to re-raise; Phase 3 drops duplicates as a backstop. | *Prior review activity* panel; `PRIOR (PR #n)` in the log |
+| **CI status** (`gh pr checks`) | A red build changes how much the findings are worth. Adds **one** consolidated `info` finding, never one per check. | `CI` badge in the report header; `CI (PR #n)` in the log |
+| **Story alignment** (optional — needs `ADO_PAT`) | Asks the one thing a rulebook can't: *did this PR build what was asked for?* Compares endpoint/method, DTO fields and acceptance criteria. | *Story alignment* panel; `STORY-ALIGN` in the log |
+
+**Story alignment is informational and never blocking.** It emits at most `info` findings and cannot change
+the recommendation banner — implementation legitimately diverges from a story during refinement. If
+`ADO_PAT` is absent the phase is skipped with a logged reason and everything else runs normally; **ADO
+credentials are optional and this job worked without them before.**
+
+False positives also get a second defence: for structural findings ("missing attribute", "wrong pattern"),
+the orchestrator now inlines **2–3 sibling files of the same kind** from `origin/main` into the verifier's
+brief. If the PR matches what the service already does, that's established local convention and the finding
+is rejected with the sibling file as evidence. The hand-maintained carve-out list is **unchanged** — the
+evidence check is additive. (Unused `using` directives remain a never-report: no sibling file can settle
+that, it needs a compiler.)
 
 ## What gets reviewed
 
@@ -104,12 +127,27 @@ idle run costs nothing. To force a fresh review, delete that PR's HTML from the 
 ## Configuration
 
 Identity and paths are **auto-detected per user** — nobody edits the scripts. Two files at the
-repo root (`ExternalAPITaskSchedulerPrompt\`) drive all four projects:
+automation root (`ExternalAPITaskSchedulerPrompt\`) drive the sibling projects:
 
 | File | Committed? | Purpose |
 |------|-----------|---------|
 | `team-roster.json`   | yes | The team: one `{ "name", "github" }` per dev. **Add a teammate = one line here.** Your own login (`gh api user -q .login`) is subtracted to get the review list. |
 | `config.local.json`  | no (git-ignored) | Per-machine paths (`repoExternalApi`, `repoServices`, `envFile`, `outputBase`). Copy `config.local.example.json` → `config.local.json` and edit **only if your checkout differs** from the defaults; otherwise paths resolve under your `%USERPROFILE%`. |
+
+### Optional: enable the story-alignment check
+
+Entirely opt-in. Add to `%USERPROFILE%\repos\.env` (the same file the other jobs use — if you already run
+`admission-ms`, it's already there and nothing more is needed):
+
+```
+ADO_PAT=<PAT with Work Items: Read>
+ADO_ORG=renweb
+ADO_PROJECT=ColdFusion
+```
+
+`Work Items: Read` is all it needs — the check is strictly read-only. Without these the wrapper logs
+`WARN: no ADO_PAT … story-alignment check will be skipped (review is unaffected)` and the review runs
+exactly as it did before.
 | `lib/team.ps1`       | yes | Shared PowerShell helpers dot-sourced by every wrapper. |
 
 The wrapper computes `reviewAuthors = roster − you` and injects the resolved logins/paths into the
@@ -148,7 +186,7 @@ Everything below is edit-a-file; no rebuild.
 ## Manual run (no scheduler)
 
 ```powershell
-pwsh -File "C:\neldevsrc\Github\TaskScheduler\ms-pr-review\run-ms-pr-review.ps1" -TaskName manual
+pwsh -File "C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\ms-pr-review\run-ms-pr-review.ps1" -TaskName manual
 # or a specific model:
 pwsh -File "...\run-ms-pr-review.ps1" -TaskName manual -Model sonnet
 ```
@@ -173,6 +211,8 @@ pwsh -File "...\register-ms-pr-review-task.ps1" -Unregister
 ## Guarantees
 
 - Read-only on GitHub (only `gh` read subcommands / `gh api` GET).
+- Read-only on ADO — the story-alignment check only *reads* a work item. No field edits, no comments, no
+  state changes, no new work items.
 - Read-only on the working tree — the wrapper records branch+HEAD before/after and warns if
   anything changed; the only writes are the HTML reports (+ throwaway temp JSON).
 - No PR comments are ever posted by the task.

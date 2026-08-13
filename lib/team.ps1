@@ -56,6 +56,10 @@ function Resolve-LocalConfig {
         repoServices    = 'c:\neldevsrc\Github\sis-services'
         envFile         = (Join-Path $env:USERPROFILE 'repos\.env')
         outputBase      = (Join-Path $env:USERPROFILE 'Downloads')
+        # Root that holds the committed team skills progress-audit counts. Intentionally EMPTY by
+        # default so that job derives it from its own location; set it only when this automation
+        # lives outside the skills repo (e.g. the standalone ExternalAPITaskSchedulerPrompt checkout).
+        skillsRoot      = ''
     }
     $cfg = [ordered]@{}
     foreach ($k in $defaults.Keys) { $cfg[$k] = $defaults[$k] }

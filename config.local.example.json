@@ -3,5 +3,7 @@
   "repoExternalApi": "c:\\neldevsrc\\Github\\sis-externalapi",
   "repoServices":    "c:\\neldevsrc\\Github\\sis-services",
   "envFile":         "%USERPROFILE%\\repos\\.env",
-  "outputBase":      "%USERPROFILE%\\Downloads"
+  "outputBase":      "%USERPROFILE%\\Downloads",
+  "_skillsRootComment": "progress-audit only. Root of the repo holding the committed team skills it counts (the folders roadmaps.json names in skillsPath). Leave EMPTY to let the job derive it (three levels up from the progress-audit folder) - correct when this automation is checked out INSIDE the skills repo. Set it when the automation is a standalone checkout, e.g. c:\\neldevsrc\\Github\\ai-resources.",
+  "skillsRoot":      ""
 }

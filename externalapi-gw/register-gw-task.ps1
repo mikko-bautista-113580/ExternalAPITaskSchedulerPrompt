@@ -17,18 +17,18 @@
     opens a PR, or writes to ADO.
 
     NOTE: this task was relocated out of the repo (c:\neldevsrc\Github\sis-externalapi\.scheduled)
-    into the central TaskScheduler folder. Re-running this registers the task against the NEW
-    wrapper path, overwriting any prior registration that pointed at the old .scheduled location.
+    into the central automation folder (ExternalAPITaskSchedulerPrompt). Re-running this registers
+    the task against the NEW wrapper path, overwriting any prior registration.
 
     Registering a task at the root task-folder usually requires an ELEVATED PowerShell.
     Run this in a "Run as Administrator" pwsh window.
 
 .EXAMPLE
-    pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1
+    pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\register-gw-task.ps1
 .EXAMPLE
-    pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1 -RunNow
+    pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\register-gw-task.ps1 -RunNow
 .EXAMPLE
-    pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1 -Unregister
+    pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\register-gw-task.ps1 -Unregister
 #>
 param(
     [string]$TaskName   = 'GW-MorningAutoPR-0700',
@@ -113,11 +113,11 @@ Write-Host "  Times   : $($Times -join ', ')  (Mon-Fri, local time)"
 Write-Host ""
 Write-Host "Verify:  Get-ScheduledTask -TaskName '$TaskName' | Get-ScheduledTaskInfo"
 Write-Host "Run now: Start-ScheduledTask -TaskName '$TaskName'"
-Write-Host "Logs:    C:\neldevsrc\Github\TaskScheduler\externalapi-gw\logs\$TaskName\"
+Write-Host "Logs:    C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\logs\$TaskName\"
 
 if ($RunNow) {
     Write-Host "`nTriggering a run now..." -ForegroundColor Cyan
     Start-ScheduledTask -TaskName $TaskName
     Write-Host "Started. Tail the newest log:" -ForegroundColor Cyan
-    Write-Host "  Get-ChildItem `"C:\neldevsrc\Github\TaskScheduler\externalapi-gw\logs\$TaskName`" | Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait `$_.FullName }"
+    Write-Host "  Get-ChildItem `"C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\logs\$TaskName`" | Sort LastWriteTime -Desc | Select -First 1 | %{ Get-Content -Wait `$_.FullName }"
 }

@@ -50,7 +50,7 @@ az login --scope 499b84ac-1321-427f-aa17-267ca6975798/.default
 To do it yourself afterwards: `/gw-test-associator <path to the SISApi.APITests file>`.
 
 Relocated here from `c:\neldevsrc\Github\sis-externalapi\.scheduled` so all scheduled-task
-artifacts live centrally under `TaskScheduler\`. The original `.scheduled` folder in the repo
+artifacts live centrally under `ExternalAPITaskSchedulerPrompt\`. The original `.scheduled` folder in the repo
 was left in place (this is a copy). `$RepoRoot` in the wrapper still points at the
 sis-externalapi checkout that claude operates on; only the wrapper/prompt/logs/lock moved.
 
@@ -66,13 +66,13 @@ sis-externalapi checkout that claude operates on; only the wrapper/prompt/logs/l
 ## Deploy / manage
 ```powershell
 # register (or re-point) the task — elevated pwsh
-pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1
+pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\register-gw-task.ps1
 
 # run it now
-pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1 -RunNow
+pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\register-gw-task.ps1 -RunNow
 
 # remove it
-pwsh -File C:\neldevsrc\Github\TaskScheduler\externalapi-gw\register-gw-task.ps1 -Unregister
+pwsh -File C:\neldevsrc\Github\ExternalAPITaskSchedulerPrompt\externalapi-gw\register-gw-task.ps1 -Unregister
 ```
 
 ## Verify

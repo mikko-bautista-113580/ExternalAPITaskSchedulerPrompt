@@ -90,6 +90,35 @@ try {
     exit 1
 }
 
+# ---- OPTIONAL ADO credentials (story-alignment check only) ------------------
+# The review itself needs no ADO access. When ~/repos/.env supplies ADO_PAT we ALSO
+# hand the prompt the org/project so Phase 1c can read the PR's story and sanity-check
+# that the PR built what was asked for (read-only; informational; never blocking).
+# A missing PAT is a SUPPORTED configuration -- warn and pass empty placeholders so the
+# prompt's gate skips that phase cleanly. NEVER make this fatal: it would break every
+# existing install that has no ADO_PAT.
+$AdoOrg = ''; $AdoProject = ''
+$EnvFile = $cfg.envFile
+if (Test-Path $EnvFile) {
+    $envMap = @{}
+    Get-Content $EnvFile | ForEach-Object {
+        $t = $_.Trim()
+        if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
+            $k, $v = $t -split '=', 2
+            $envMap[$k.Trim()] = $v.Trim().Trim('"').Trim("'")
+        }
+    }
+    if ($envMap['ADO_PAT']) {
+        $AdoOrg     = if ($envMap['ADO_ORG'])     { $envMap['ADO_ORG'] }     else { 'renweb' }
+        $AdoProject = if ($envMap['ADO_PROJECT']) { $envMap['ADO_PROJECT'] } else { 'ColdFusion' }
+        Write-Log "ADO creds found -- story-alignment enabled ($AdoOrg/$AdoProject)."
+    } else {
+        Write-Log "WARN: no ADO_PAT in $EnvFile -- story-alignment check will be skipped (review is unaffected)."
+    }
+} else {
+    Write-Log "WARN: env file not found at $EnvFile -- story-alignment check will be skipped (review is unaffected)."
+}
+
 # ---- concurrency guard -----------------------------------------------------
 $LockFile = Join-Path $ScheduledDir '.ms-pr-review.lock'
 if (Test-Path $LockFile) {
@@ -108,6 +137,11 @@ try {
     $branchBefore = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
     $headBefore   = (git rev-parse HEAD 2>&1).Trim()
     Write-Log "Branch before: $branchBefore   HEAD before: $headBefore"
+    # Re-snapshotted immediately before the claude launch. The pre-check + fetch take minutes,
+    # during which a sibling automation or the user's IDE can switch branches -- that must not be
+    # reported as "the review changed the tree" (it produced a false red WARNING on 2026-08-07).
+    $branchAtLaunch = $branchBefore
+    $headAtLaunch   = $headBefore
 
     # Snapshot existing reports so we can report just this run's output.
     $reportsBefore = @{}
@@ -122,7 +156,9 @@ try {
     $skipClaude = $false
     try {
         # $reviewAuthors computed above (roster minus current user).
-        $openJson = gh pr list --repo $Repo --state open --limit 100 --json number,author,assignees,isDraft,updatedAt 2>$null
+        # --limit must exceed the repo's open-PR count (180+ and growing): gh truncates silently,
+        # and a truncated page would make the pre-check skip a launch for PRs it never saw.
+        $openJson = gh pr list --repo $Repo --state open --limit 400 --json number,author,assignees,isDraft,updatedAt 2>$null
         if ($LASTEXITCODE -eq 0 -and $openJson) {
             $openPrs = $openJson | ConvertFrom-Json
             $reviewed = @{}
@@ -142,7 +178,10 @@ try {
                 Write-Milestone '>' "Un-reviewed candidate PR(s): $(($todo.number | Sort-Object) -join ', ')"
             }
         } else {
-            Write-Log "Pre-check: 'gh pr list' failed or returned nothing; launching claude and letting the prompt decide."
+            # Log exit code + payload size: "failed" and "returned nothing" need different fixes,
+            # and without this the run just says "launching claude" with no way to tell which.
+            $bytes = ($openJson | Out-String).Trim().Length
+            Write-Log "Pre-check: 'gh pr list' failed or returned nothing (exit=$LASTEXITCODE, stdout=${bytes} chars); launching claude and letting the prompt decide."
         }
     } catch {
         Write-Log "Pre-check error (non-fatal): $_  -- launching claude anyway."
@@ -181,24 +220,28 @@ try {
     $script:m = @{ GhSeen=$false; GitSeen=$false; ReviewListSeen=$false; Reviewed=0; AgentsDispatched=0 }
     $script:TotalCostUsd = 0.0
 
+    # NOTE: the parameter is $toolInput, NOT $input. `$input` is a PowerShell automatic variable
+    # (the pipeline enumerator) and it silently shadows a same-named parameter -- the bound value
+    # is replaced by an EMPTY, non-null enumerator, so every summary logged as a bare
+    # "PowerShell: " / "Read: " with the arguments stripped. Do not rename it back.
     function Format-ToolUseSummary {
-        param($name, $input)
-        if ($null -eq $input) { return "$name (no input)" }
+        param($name, $toolInput)
+        if ($null -eq $toolInput) { return "$name (no input)" }
         switch ($name) {
-            'Bash'       { return "Bash: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'PowerShell' { return "PowerShell: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'Read'       { return "Read: $($input.file_path)" }
-            'Write'      { return "Write: $($input.file_path)" }
-            'Glob'       { return "Glob: $($input.pattern)" }
-            'Grep'       { return "Grep: $($input.pattern)" }
-            'TodoWrite'  { return "TodoWrite: $((($input.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
+            'Bash'       { return "Bash: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'PowerShell' { return "PowerShell: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'Read'       { return "Read: $($toolInput.file_path)" }
+            'Write'      { return "Write: $($toolInput.file_path)" }
+            'Glob'       { return "Glob: $($toolInput.pattern)" }
+            'Grep'       { return "Grep: $($toolInput.pattern)" }
+            'TodoWrite'  { return "TodoWrite: $((($toolInput.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
             { $_ -eq 'Agent' -or $_ -eq 'Task' } {
-                $sub = if ($input.subagent_type) { $input.subagent_type } else { 'agent' }
-                $desc = if ($input.description) { $input.description } elseif ($input.prompt) { ($input.prompt -replace '\s+', ' ') -replace '^(.{0,100}).*', '$1' } else { '' }
+                $sub = if ($toolInput.subagent_type) { $toolInput.subagent_type } else { 'agent' }
+                $desc = if ($toolInput.description) { $toolInput.description } elseif ($toolInput.prompt) { ($toolInput.prompt -replace '\s+', ' ') -replace '^(.{0,100}).*', '$1' } else { '' }
                 return "Agent[$sub]: $desc"
             }
             default {
-                $json = ($input | ConvertTo-Json -Compress -ErrorAction SilentlyContinue) -replace '\s+', ' '
+                $json = ($toolInput | ConvertTo-Json -Compress -ErrorAction SilentlyContinue) -replace '\s+', ' '
                 if ($json.Length -gt 200) { $json = $json.Substring(0, 200) + '...' }
                 return "$name $json"
             }
@@ -282,7 +325,7 @@ try {
                 foreach ($block in $ev.message.content) {
                     switch ($block.type) {
                         'text'     { ($block.text -split "`r?`n") | Where-Object { $_ -ne '' } | ForEach-Object { Write-Log "[claude] $_" } }
-                        'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)" }
+                        'tool_use' { Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -toolInput $block.input)" }
                         'thinking' { $t = ($block.thinking -replace "`r?`n", ' '); if ($t.Length -gt 200) { $t = $t.Substring(0,200)+'...' }; if (-not [string]::IsNullOrWhiteSpace($t)) { Write-Log "[claude:thinking] $t" } }
                         default    { Write-Log "[claude:assistant:?] $($block.type)" }
                     }
@@ -315,6 +358,9 @@ try {
         Write-Milestone 'v' "Pre-flight passed (gh authenticated, origin fetched)."
         Write-Milestone '>' "Launching claude (model=$Model) for read-only PR review..."
 
+        $branchAtLaunch = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
+        $headAtLaunch   = (git rev-parse HEAD 2>&1).Trim()
+
         $Prompt = Get-Content $PromptFile -Raw
         # Fill identity/path placeholders so the prompt reflects whoever is running.
         # .Replace() is literal (no regex/backslash/$ pitfalls with Windows paths).
@@ -323,6 +369,9 @@ try {
         $Prompt = $Prompt.Replace('{{OUTPUT_DIR}}',     $OutputDir)
         $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}',  $ScheduledDir)
         $Prompt = $Prompt.Replace('{{REPO_ROOT}}',      $RepoRoot)
+        # Empty when no ADO_PAT -- the prompt's Phase 1c gate checks for exactly that.
+        $Prompt = $Prompt.Replace('{{ADO_ORG}}',        $AdoOrg)
+        $Prompt = $Prompt.Replace('{{ADO_PROJECT}}',    $AdoProject)
         try {
             $Prompt | & $ClaudeCmd `
                 --print `
@@ -344,8 +393,12 @@ try {
     # ---- read-only guarantee check ----
     $branchAfter = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
     $headAfter   = (git rev-parse HEAD 2>&1).Trim()
-    if ($branchAfter -ne $branchBefore -or $headAfter -ne $headBefore) {
-        Write-Milestone 'X' "WARNING: branch/HEAD changed during run! before=$branchBefore@$headBefore after=$branchAfter@$headAfter"
+    if ($branchAfter -ne $branchAtLaunch -or $headAfter -ne $headAtLaunch) {
+        $when = if ($skipClaude) { 'during the run (claude was never launched)' } else { 'during the claude run' }
+        Write-Milestone 'X' "WARNING: branch/HEAD changed $when! atLaunch=$branchAtLaunch@$headAtLaunch after=$branchAfter@$headAfter"
+    } elseif ($branchAtLaunch -ne $branchBefore -or $headAtLaunch -ne $headBefore) {
+        # Someone else moved the repo while we were fetching. The review itself stayed read-only.
+        Write-Log "NOTE: branch/HEAD changed BEFORE claude launched (external process, not this run): $branchBefore@$headBefore -> $branchAtLaunch@$headAtLaunch. Read-only guarantee for the review: OK (still on $branchAfter @ $headAfter)."
     } else {
         Write-Log "Read-only guarantee OK: still on $branchAfter @ $headAfter."
     }
