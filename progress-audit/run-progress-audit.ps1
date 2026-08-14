@@ -312,7 +312,11 @@ try {
                         }
                     }
                     if ($block.type -eq 'text' -and $block.text) {
-                        foreach ($mm in [regex]::Matches($block.text, '(?m)^\s*STATUS:\s*(\S+)\s+(.+)$')) {
+                        # The status vocabulary contains two-word values ('On track', 'At risk',
+                        # 'No roadmap'), so a bare (\S+) captured only 'On' and pushed 'track' into
+                        # the message. Match the two-word forms first (either spelling), and keep
+                        # (\S+) as the last branch so an unexpected word still logs a milestone.
+                        foreach ($mm in [regex]::Matches($block.text, '(?mi)^\s*STATUS:\s*(On[- ]track|At[- ]risk|No[- ]roadmap|\S+)\s+(.+)$')) {
                             Write-Milestone 'i' "$($mm.Groups[1].Value) - $($mm.Groups[2].Value.Trim())"
                         }
                         if ($block.text -match '(?m)^\s*HOLD:\s*(.+)$') {
@@ -385,7 +389,10 @@ try {
     $Prompt = $Prompt.Replace('{{EXPECTED_TABLE}}',   $expectedTable)
     $Prompt = $Prompt.Replace('{{TRIGGER_NOTES}}',    $(if ($Notes) { $Notes } else { '(none supplied)' }))
     $Prompt = $Prompt.Replace('{{ARTIFACT_URL}}',     $roadmaps.artifact.url)
-    $Prompt = $Prompt.Replace('{{ARTIFACT_HTML}}',    $(if ($ArtifactSnapshot) { $ArtifactSnapshot } else { '(none - no local snapshot this run)' }))
+    # When there is no snapshot, say WHY in the prompt. Left as a bare '(none)', the model went
+    # source-diving -- it read this wrapper and grepped it to work out whether a read route existed,
+    # spending tool calls to rediscover what the preflight WARN already knows.
+    $Prompt = $Prompt.Replace('{{ARTIFACT_HTML}}',    $(if ($ArtifactSnapshot) { $ArtifactSnapshot } else { '(none this run - no snapshot file exists at ' + $ArtifactHtml + '. Route 1 is unavailable and WebFetch returns an empty body for this auth-gated page, so expect to hold at Step 1. Do not go looking for the file or for the wrapper source.)' }))
     $Prompt = $Prompt.Replace('{{POINTS_PER_PHASE}}', [string]$roadmaps.artifact.pointsPerPhase)
     $Prompt = $Prompt.Replace('{{ROADMAPS_FILE}}',    $RoadmapsFile)
     $Prompt = $Prompt.Replace('{{RESULT_FILE}}',      $ResultFile)
@@ -438,7 +445,9 @@ try {
             # scored= matters: with zero scores "clean=True" is vacuous, not a healthy run.
             $scored = @($result.teams | Where-Object { $null -ne $_.scoreAfter }).Count
             Write-Log "Gate: scored=$scored/$(@($result.teams).Count) clean=$clean regressions=$($regressions.Count) overdue=$($overdue.Count) published=$($result.published)"
+            $teamTotal = @($result.teams).Count
             if ($scored -eq 0) { Write-Log "WARN: no team was scored this run -- 'clean' says nothing about team health." }
+            elseif ($scored -lt $teamTotal) { Write-Log "WARN: only $scored of $teamTotal teams were scored -- 'clean' covers the scored teams only, not the run." }
             foreach ($r in $regressions) { Write-Log "  REGRESSION $r" }
             foreach ($o in $overdue)     { Write-Log "  OVERDUE    $o" }
 
@@ -458,8 +467,10 @@ try {
         }
     }
 
-    $drafts = Get-ChildItem $OutputDir -Filter '*.html' -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -ge $runStart }
+    # .md too: on a hold with no readable page the report is the ONLY output, and filtering to
+    # *.html left the wrapper log with no record that anything was produced at all.
+    $drafts = Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in '.html', '.md' -and $_.LastWriteTime -ge $runStart }
     if ($drafts) {
         Write-Log "Draft/report files written this run:"
         $drafts | Sort-Object Name | ForEach-Object { Write-Log "  $($_.FullName)" }

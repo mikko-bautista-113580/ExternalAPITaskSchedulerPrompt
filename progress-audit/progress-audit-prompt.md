@@ -22,7 +22,7 @@ The question you are answering for each team is exactly this: *by today's date, 
 Read the page by the first route that works, in this order:
 
 1. **Local snapshot** — `Local artifact snapshot: {{ARTIFACT_HTML}}`. If that is a real path (not `(none ...)`), `Read` it. This is the reliable route: the artifact is auth-gated and client-rendered, so a plain HTTP fetch never sees the rendered page.
-2. **Artifact tool** — if an Artifact tool is available in this session, use its read/list capability on `{{ARTIFACT_URL}}`. Log whether the tool exists either way; that answers the repo's open question about headless availability.
+2. **Artifact tool** — only if one is already listed in this session. **In a scheduled headless run it is not** — confirmed on the 2026-08-13 run, where both a keyword `ToolSearch` and an explicit `select:Artifact` came back empty. Do not spend tool calls probing for it; if it is not visible without a search, go straight to route 3.
 3. **`WebFetch {{ARTIFACT_URL}}`** — last resort.
 
 Extract, per lead: current score, the three checkpoint labels and their per-checkpoint values, the roadmap meter percentages, and the status of each phase. This is your `scoreBefore` for every team.
@@ -73,8 +73,10 @@ Anything a phase's exit criteria require that you find **no** evidence for is un
 Emit one line per team, exactly this shape, so the wrapper can log it:
 
 ```
-STATUS: <On track|At risk|Behind|Ahead|No-roadmap> <Team> — phase <actual> vs expected <expected>, <score>%
+STATUS: <On-track|At-risk|Behind|Ahead|No-roadmap> <Team> — phase <actual> vs expected <expected>, <score>%
 ```
+
+**Hyphenate the two-word statuses on this line** — the wrapper reads the status as the first token, so `On track` would split. The `"status"` field in `{{RESULT_FILE}}` keeps the spaced form (`On track`, `At risk`, `No roadmap`).
 
 ## Step 5 — Write the result file FIRST
 
@@ -113,9 +115,19 @@ Compute: **clean** = no team has `scoreAfter < scoreBefore` **and** no team has 
 
   A hold is a normal outcome, not a failure — exit 0. Bad news gets a human read before it goes on the page; that is the whole point of the gate.
 
+  **Exception — no page was read.** If Step 1 failed, there is nothing to propose an edit *to*: writing an HTML file would mean inventing the narrative cells, roadmap sections, takeaways and CSS you never read, which the no-inventing-evidence rule forbids. In that case skip the HTML entirely, hold with Step 1's reason, and say in the report that the proposed page was skipped because the current page was unreadable. The report is that run's only artefact and that is correct.
+
 ## Step 7 — Update the page (only when the gate passes)
 
 Fetch the current HTML, edit it, and republish with the Artifact tool passing `url: {{ARTIFACT_URL}}` so it updates in place and keeps its version history. Save a copy to `{{OUTPUT_DIR}}\ai-progress-{{TODAY}}.html` either way.
+
+**No Artifact tool → you cannot publish, and that is not a failure.** A scheduled headless run has no Artifact tool (see Step 1). Write the edited HTML to `{{OUTPUT_DIR}}\ai-progress-{{TODAY}}.html`, leave `"published": false` in `{{RESULT_FILE}}`, log
+
+```
+HOLD: no Artifact tool in this session — publish the drafted HTML from an interactive session
+```
+
+and exit 0. Never claim a publish you could not make.
 
 **You may change only these regions.** Everything else — the narrative cells, the roadmap sections, the takeaways, the CSS — is human-written and read-only unless the evidence directly contradicts it:
 

@@ -30,7 +30,9 @@ they actually?"* needs judgement. The job splits exactly along that line:
 1. **Claude CLI** at `%APPDATA%\npm\claude.cmd`, **PowerShell 7** (`pwsh`) — same prerequisites as
    the other jobs in this folder.
 2. **Confirm the anchor dates** (see below). Do this before you trust any IMPACT or QUICKPAY number.
-3. **Verify the Artifact tool is reachable headless** — see [Known unknown](#known-unknown).
+3. **Save an artifact snapshot** — without one the run cannot read the page and holds at Step 1. See
+   [Reading the artifact](#reading-the-artifact). Publishing is manual either way — see
+   [Publishing is manual](#publishing-is-manual--there-is-no-artifact-tool-headless).
 4. Register the task from an **elevated** pwsh:
 
    ```powershell
@@ -157,30 +159,37 @@ want the long history; logs here rotate at 30 runs.
 
 ## Output
 
+The wrapper lists every `.html` and `.md` file written under `Downloads\AI Progress Audit\` during the
+run, so the log always names what came out of it — on a Step 1 hold that is the report alone.
+
 | Path | What |
 |---|---|
 | `logs\<TaskName>\<TaskName>_<ts>.log` | Full run log. Grep `===` for milestones, `RESULT` for the per-team scores. |
 | `logs\<TaskName>\<TaskName>_<ts>.audit-result.json` | The gate's evidence: before/after scores, status, overdue criteria per team. |
 | `logs\<TaskName>\<TaskName>_<ts>.review.md` | Post-run process review (shared `Invoke-LogReview`). |
-| `Downloads\AI Progress Audit\ai-progress-<date>.html` | The proposed page — always written, published or not. |
+| `Downloads\AI Progress Audit\ai-progress-<date>.html` | The proposed page, published or not. Skipped when Step 1 could not read the current page — there is nothing to base an edit on. |
 | `Downloads\AI Progress Audit\ai-progress-audit-<date>.md` | The report: expected vs actual, what moved, what couldn't be verified. |
 
-## Known unknown
+## Publishing is manual — there is no Artifact tool headless
 
-**The Artifact tool in headless mode is unverified.** The wrapper launches `claude --print
---dangerously-skip-permissions`, and whether the Artifact tool is exposed in that mode has not been
-confirmed. Test with `-DraftOnly` first and read the log for an `Artifact:` tool line.
+**Settled on the 2026-08-13 run.** The wrapper launches `claude --print
+--dangerously-skip-permissions`, and in that mode **no Artifact tool is exposed** — the run probed
+the tool registry both by keyword and by explicit `select:Artifact` and got nothing back. So Step 7's
+publish path cannot execute in this harness at all, even on a clean gate with the draft flag off.
 
-If it isn't available, the job still earns its keep — it computes, drafts and reports — and the
-publish step becomes: open the drafted HTML from `Downloads\AI Progress Audit\` in an interactive
-session and publish it with `url:` pointing at the existing artifact. Nothing else changes.
+The job still earns its keep — it computes, drafts and reports — but **publishing is a human step**:
+open the drafted HTML from `Downloads\AI Progress Audit\` in an interactive session and publish it
+with `url:` pointing at the existing artifact. The prompt now holds with
+`HOLD: no Artifact tool in this session` instead of pretending it published.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
 | `FATAL: roadmaps.json is not valid JSON` | Trailing comma or a stray comment — the file is strict JSON; `_comment` keys are the way to annotate. |
-| `HOLD: artifact unreadable` | No read route worked. Expected when there is no snapshot — see [Reading the artifact](#reading-the-artifact) and save one. |
+| `HOLD: artifact unreadable` | No read route worked. Expected when there is no snapshot — see [Reading the artifact](#reading-the-artifact) and save one. The whole run is then near-worthless: only teams scoreable from repo data alone get a number, so refresh the snapshot rather than letting it recur. |
+| `HOLD: no Artifact tool in this session` | Working as designed — headless cannot publish. Publish the drafted HTML by hand. |
+| `WARN: only N of M teams were scored` | Usually `HOLD: artifact unreadable` upstream — `clean=True` on that run says nothing about the unscored teams. |
 | `No audit-result.json written` | The run died before Step 5. The artifact was not touched — check the log's last `[claude]` lines. |
 | Every team reads `Behind` | Almost always a wrong `anchorDate`, or a `skillsPath` pointing at nothing. Check the expected-position block at the top of the log. |
 | A team's score fell and the run held | Working as designed. Read the report, decide whether the drop is real, and re-run with `-Notes` if evidence was missed. |
