@@ -380,8 +380,12 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
             if ($ev.type -eq 'assistant') {
                 foreach ($block in $ev.message.content) {
                     if ($block.type -eq 'tool_use') {
-                        $toolName = $block.name
-                        $input    = $block.input
+                        $toolName  = $block.name
+                        # NOT `$input` -- that is a PowerShell automatic variable (the pipeline
+                        # enumerator). Shadowing it works by luck for a plain in-body assignment
+                        # but silently returns empty when bound as a param (see
+                        # Format-ToolUseSummary). Use an unambiguous name on both sides.
+                        $toolInput = $block.input
 
                         # Connection milestones are deferred to the tool_result side so we know they
                         # actually succeeded, not just that claude tried.
@@ -391,11 +395,18 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                         # per-action names (wit_get_work_item, wit_query_by_wiql, ...) no longer
                         # exist, so these conditions never matched. Match both shapes: the live
                         # consolidated names, plus the legacy prefixes in case of a rollback.
+                        # The MCP server is not always present (2026-08-14: absent for the whole
+                        # run), in which case claude reaches ADO over REST from a shell tool. Match
+                        # that shape too, otherwise these milestones never fire on a REST-only run.
+                        $shellCmd = if (($toolName -eq 'Bash' -or $toolName -eq 'PowerShell') -and
+                                        $toolInput.command) { $toolInput.command } else { '' }
+
                         if (-not $script:milestones.TicketFetchStarted -and
                             ($toolName -eq 'mcp__azure__wit_work_item' -or
                              $toolName -eq 'mcp__azure__wit_query' -or
                              $toolName -like 'mcp__azure__wit_get_work_item*' -or
-                             $toolName -eq 'mcp__azure__wit_query_by_wiql')) {
+                             $toolName -eq 'mcp__azure__wit_query_by_wiql' -or
+                             $shellCmd -match 'dev\.azure\.com/[^ ]*_apis/wit/')) {
                             $script:milestones.TicketFetchStarted = $true
                             Write-Milestone '→' "Reading ticket detail from ADO..."
                         }
@@ -405,13 +416,17 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                             ($toolName -eq 'mcp__azure__testplan' -or
                              $toolName -eq 'mcp__azure__wiki' -or
                              $toolName -like 'mcp__azure__testplan_list_*' -or
-                             $toolName -eq 'mcp__azure__wiki_get_page_content')) {
+                             $toolName -eq 'mcp__azure__wiki_get_page_content' -or
+                             $shellCmd -match 'dev\.azure\.com/[^ ]*_apis/test(plan)?/')) {
                             $script:milestones.TestSuitesStarted = $true
                             Write-Milestone '→' "Checking test suites from Testing Considerations..."
                         }
 
-                        if ($toolName -eq 'Bash' -and $input.command) {
-                            $cmd = $input.command
+                        # Branch/build detection must watch BOTH shell tools: on 2026-08-14 claude
+                        # ran every git and dotnet command through `PowerShell`, so a Bash-only
+                        # guard emitted no branch and no build milestone for the entire run.
+                        if ($shellCmd) {
+                            $cmd = $shellCmd
                             # Allow flags between `checkout` and `-b` -- the prompt mandates
                             # `git checkout --no-track -b story/... origin/main`, which the old
                             # anchored `^\s*git checkout -b` pattern could never match. `git switch`
@@ -431,11 +446,11 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                             }
                         }
 
-                        if ($toolName -eq 'Write' -and $input.file_path) {
+                        if ($toolName -eq 'Write' -and $toolInput.file_path) {
                             $script:milestones.FileWriteCount++
                             if (-not $script:milestones.CodegenStarted -and
-                                ($input.file_path -like '*src\Applications.SISApi*' -or
-                                 $input.file_path -like '*src/Applications.SISApi*')) {
+                                ($toolInput.file_path -like '*src\Applications.SISApi*' -or
+                                 $toolInput.file_path -like '*src/Applications.SISApi*')) {
                                 $script:milestones.CodegenStarted = $true
                                 Write-Milestone '→' "Generating endpoint files..."
                             }
@@ -575,23 +590,27 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
     }
 
     function Format-ToolUseSummary {
-        param($name, $input)
-        if ($null -eq $input) { return "$name (no input)" }
+        # The parameter MUST NOT be named `$input`. `$input` is a PowerShell automatic variable
+        # (the pipeline enumerator); when bound as a param its automatic value shadows the bound
+        # one, so every `$input.command` / `$input.file_path` read empty. That silently blanked
+        # the detail on ALL ~120 `[claude:tool->]` lines of the 2026-08-14 log.
+        param($name, $toolInput)
+        if ($null -eq $toolInput) { return "$name (no input)" }
         switch ($name) {
-            'Bash'       { return "Bash: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'Read'       { return "Read: $($input.file_path)$(if ($input.offset) { " offset=$($input.offset) limit=$($input.limit)" })" }
-            'Write'      { return "Write: $($input.file_path) ($(($input.content -split '\n').Count) lines)" }
-            'Edit'       { return "Edit: $($input.file_path)" }
-            'Glob'       { return "Glob: $($input.pattern)$(if ($input.path) { " in $($input.path)" })" }
-            'Grep'       { return "Grep: $($input.pattern)$(if ($input.glob) { " (glob=$($input.glob))" })" }
-            'PowerShell' { return "PowerShell: $(($input.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
-            'TodoWrite'  { return "TodoWrite: $((($input.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
-            'Skill'      { return "Skill: $($input.skill)$(if ($input.args) { " args=$($input.args -replace '\s+', ' ' -replace '^(.{0,80}).*','$1')" })" }
-            'Agent'      { return "Agent: subagent_type=$($input.subagent_type) desc=$($input.description)" }
-            'WebFetch'   { return "WebFetch: $($input.url)" }
-            'WebSearch'  { return "WebSearch: $($input.query)" }
+            'Bash'       { return "Bash: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'Read'       { return "Read: $($toolInput.file_path)$(if ($toolInput.offset) { " offset=$($toolInput.offset) limit=$($toolInput.limit)" })" }
+            'Write'      { return "Write: $($toolInput.file_path) ($(($toolInput.content -split '\n').Count) lines)" }
+            'Edit'       { return "Edit: $($toolInput.file_path)" }
+            'Glob'       { return "Glob: $($toolInput.pattern)$(if ($toolInput.path) { " in $($toolInput.path)" })" }
+            'Grep'       { return "Grep: $($toolInput.pattern)$(if ($toolInput.glob) { " (glob=$($toolInput.glob))" })" }
+            'PowerShell' { return "PowerShell: $(($toolInput.command -replace '\s+', ' ') -replace '^(.{0,160}).*', '$1')" }
+            'TodoWrite'  { return "TodoWrite: $((($toolInput.todos) | ForEach-Object { '[' + $_.status[0] + '] ' + $_.content }) -join ' | ')" }
+            'Skill'      { return "Skill: $($toolInput.skill)$(if ($toolInput.args) { " args=$($toolInput.args -replace '\s+', ' ' -replace '^(.{0,80}).*','$1')" })" }
+            'Agent'      { return "Agent: subagent_type=$($toolInput.subagent_type) desc=$($toolInput.description)" }
+            'WebFetch'   { return "WebFetch: $($toolInput.url)" }
+            'WebSearch'  { return "WebSearch: $($toolInput.query)" }
             default {
-                $json = ($input | ConvertTo-Json -Compress -Depth 3 -ErrorAction SilentlyContinue) -replace '\s+', ' '
+                $json = ($toolInput | ConvertTo-Json -Compress -Depth 3 -ErrorAction SilentlyContinue) -replace '\s+', ' '
                 if ($json.Length -gt 200) { $json = $json.Substring(0, 200) + '...' }
                 return "$name $json"
             }
@@ -654,7 +673,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                                 ForEach-Object { Write-Log "[claude] $_" }
                         }
                         'tool_use' {
-                            Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -input $block.input)"
+                            Write-Log "[claude:tool->] $(Format-ToolUseSummary -name $block.name -toolInput $block.input)"
                         }
                         'thinking' {
                             # Redacted/empty thinking blocks carry no text; logging them emitted
@@ -689,6 +708,10 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
             'rate_limit_event' {
                 Write-Log "[claude:info] rate_limit_event"
             }
+            # 30-second keep-alive heartbeat emitted during long builds/tests. It carries no
+            # information, and routing it through `default` tagged 34 lines (~7% of the
+            # 2026-08-14 log) as "(no formatter)" — camouflaging genuinely unhandled events.
+            'tool_progress' { }
             default {
                 Write-Log "[claude:event:$($ev.type)] (no formatter)"
             }
