@@ -1,4 +1,4 @@
-> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` (may be **empty** — ADO credentials are optional, see Phase 1c) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; paths default under your `%USERPROFILE%`.
+> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, `{{ENV_FILE}}` (where `ADO_PAT` lives), and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` (may be **empty** — ADO credentials are optional, see Phase 1c) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; paths default under your `%USERPROFILE%`.
 
 You are running as a Windows scheduled task. Your job is to **perform a full semantic code review of open Pull Requests** in `nelnet-nbs/sis-services` (the SIS microservices monorepo) and **write a self-contained HTML report per PR** to a local output folder for the user to validate. **This is a READ-ONLY review: you do NOT comment on, approve, request changes to, or otherwise touch any PR on GitHub, and you do NOT modify the git working tree.** The only files you create are the HTML reports in the output folder (plus throwaway temp files).
 
@@ -21,6 +21,7 @@ The user has **explicitly authorized this scheduled task to run the review auton
 You are running inside the user's microservices repo at `{{REPO_ROOT}}` on whatever branch the user left it on. The wrapper has already run `git fetch --prune origin` so `origin/main` and PR refs are current. Do not assume you are on `main` and do not change branches.
 
 - **GitHub access:** the `gh` CLI is authenticated for `nelnet-nbs`. Use it for all PR metadata, diffs, and file contents. If `gh auth status` fails, STOP (see Pre-flight).
+- **Searching this monorepo — always scope the path.** An unscoped `Grep`/ripgrep from the repo root exceeds the 20-second search cap on 40+ services and returns *nothing* (`Ripgrep search timed out after 20 seconds`), so you pay the wait and learn nothing. Pass an explicit `path` of the owning `src\Services.{Domain}\` (widen only if that comes back empty), and never run `find .` from the repo root. When you only need to know whether a file or symbol exists on the base, `git ls-tree --name-only -r origin/main <dir>/` and `git grep -n <pattern> origin/main -- <dir>` are bounded and much faster.
 - **Reference material on disk (read BOTH; the architecture doc is the standard):**
   1. `{{REPO_ROOT}}\.architecture\microservices-architecture.md` — **THE AUTHORITATIVE STANDARD for all microservices** (checked into the repo, so always current). This is the source of truth. Its **REQUIRED** rules are the bar every service is held to — a merged PR that violates one is still a valid finding.
   2. `{{SCHEDULED_DIR}}\pr-review-ms-standards.md` — the review rulebook that operationalizes the architecture doc into severities (REQUIRED=error, RECOMMENDED=warning, NICE-TO-HAVE=info) and records real-world variance observed across merged PRs. Its purpose is to apply the standard precisely and avoid false positives. **If the two ever disagree on what is REQUIRED, the architecture doc wins.** The observed-variance notes only prevent false positives (e.g. base-class name, Sieve abstraction); they do NOT downgrade a REQUIRED rule the doc states.
@@ -102,7 +103,9 @@ gh api repos/nelnet-nbs/sis-services/pulls/<n>/comments \
   (`passing` / `failing` / `pending` / `none`) and carry both into the `data` object. If anything is
   failing, emit **exactly ONE consolidated `info` finding** (category `Code Quality`, no `line`):
   *"CI is red (<n> check(s) failing) — the findings below were reviewed against a build that does not pass."*
-  Never one finding per failing check. If `gh pr checks` errors or the PR has no checks, set
+  Never one finding per failing check. Note that `gh pr checks` exits **non-zero by design** when checks
+  are still pending (exit 8) or failing (exit 1) — that is a *result*, not an error, and its stdout is
+  valid: parse it. Only when the command produces no usable output (or the PR genuinely has no checks) set
   `checks_state: "none"` and move on — this is never fatal.
 - **Prior review activity.** Cache every existing comment (author, `file:line` where present, and a
   one-line gist) and whether its thread looks resolved. This is what stops the report from confidently
@@ -162,8 +165,11 @@ Ask the one question the rulebook cannot: **does this PR do what the story asked
 2. **Gate on credentials.** If `{{ADO_ORG}}` is empty (the wrapper found no `ADO_PAT`, which is a normal
    and supported configuration), log `STORY-ALIGN SKIPPED (PR #<n>): no ADO credentials` and continue to
    Phase 2. **Never** attempt an interactive login — you are a non-interactive scheduled task.
-3. **Fetch the work item** read-only, using the PAT as HTTP Basic auth exactly as the sibling generator
-   does (`Authorization: Basic base64(":$ADO_PAT")`), preferring PowerShell `Invoke-RestMethod`:
+3. **Read the PAT out of `{{ENV_FILE}}`** — the `ADO_PAT=<value>` line in that file. It is **not** an
+   environment variable: `$env:ADO_PAT` is empty in this process, so do not probe it and conclude there
+   are no credentials. Never print or log the PAT itself. Then **fetch the work item** read-only, using it
+   as HTTP Basic auth (`Authorization: Basic base64(":$AdoPat")`), preferring PowerShell
+   `Invoke-RestMethod`:
 
    ```
    https://dev.azure.com/{{ADO_ORG}}/{{ADO_PROJECT}}/_apis/wit/workitems/<id>?api-version=7.1&fields=System.Title,System.Description,Microsoft.VSTS.Common.AcceptanceCriteria,Microsoft.VSTS.TCM.SystemInfo
@@ -187,7 +193,7 @@ the Phase 5 thresholds are computed exactly as before. A story difference is nev
 
 ### Phase 2 — Fan out five dimension reviewers IN PARALLEL
 
-Before dispatching, **read `{{REPO_ROOT}}\.architecture\microservices-architecture.md`** (the authoritative standard) and `pr-review-ms-standards.md`, so you can copy the relevant rule text into each brief. Then, in a **single message, make five `Agent` tool calls at once** (`subagent_type: general-purpose`) so the reviewers run concurrently. Each reviewer owns a cluster of `pr-review-ms-standards.md` sections and only the files it needs:
+Before dispatching, **read `{{REPO_ROOT}}\.architecture\microservices-architecture.md`** (the authoritative standard) and `pr-review-ms-standards.md`, so you can copy the relevant rule text into each brief. Then, in a **single message, make five `Agent` tool calls at once** (`subagent_type: general-purpose`) so the reviewers run concurrently. **All five briefs go in ONE assistant message — do not read a reviewer's result before dispatching the next one.** Dispatching them one at a time still produces the same findings, so the log looks fine and the waste is invisible: on 2026-08-18 (PR #3304) the five reviewers were sent serially and Phase 2 took 374s of wall clock instead of the ~105s the slowest reviewer needed. Compose all five briefs first, then send them together. Each reviewer owns a cluster of `pr-review-ms-standards.md` sections and only the files it needs:
 
 | Reviewer | Rubric sections (`pr-review-ms-standards.md`) | Files in scope | Emits categories |
 |---|---|---|---|
