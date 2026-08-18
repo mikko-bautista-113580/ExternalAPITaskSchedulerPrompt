@@ -314,21 +314,30 @@ public class ResourceOutput : ResourceInput
 
 ### HATEOAS Links
 
-Reference links MUST use real endpoint URLs. Do NOT use placeholder strings:
+Reference links SHOULD use real endpoint URLs wherever the target endpoint exists:
 
 ```csharp
-// BAD:
-Href = "Endpoint not yet implemented"
-
 // GOOD:
 Href = $"{apiDomain}/Lesson/Unit/?Filters=Id=={dto.UnitId}"
+
+// Sanctioned when no endpoint exists yet for that reference:
+Href = "Endpoint not yet implemented"
 ```
 
-If the endpoint doesn't exist yet, omit the reference entirely until it does.
+**Carve-out — do NOT flag the sanctioned placeholder.** The repo's own generator spec
+(`.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md`, "Reference Object Rules":
+*"No defined endpoint → set `Href = "Endpoint not yet implemented"`"*) **mandates** that exact string
+for a reference whose endpoint does not exist, and it ships in 84 `*Output.cs` files across 15+ domains
+on `main`. It is established local convention, not a defect — flagging it fires on essentially every new
+endpoint slice and gets dismissed every time.
+
+Flag it **only** when the generator spec defines a real Href for that reference type — `GradeLevelReference`,
+`SchoolYearReference`, `SchoolIdReference`, `StudentReference`, `ClassReference`, `FamilyReference`,
+`CourseReference` — and the PR used the placeholder anyway.
 
 ### Violations to Flag
 
-- **warning**: HATEOAS links with placeholder text like `"Endpoint not yet implemented"`
+- **warning**: Placeholder `Href` used for one of the reference types the generator spec defines a real URL for (see the carve-out above). A bare `"Endpoint not yet implemented"` on a reference with no defined endpoint is **NOT** a finding
 - **info**: Output model missing `[ApplySieve]` attribute (~45% adoption, recommended for paged queries)
 
 ---
@@ -495,7 +504,7 @@ Standard pattern uses `FixtureBuilder.GetGatewayClient(ApiUrl.BaseUrl, ApiKey.X.
 - **error**: Synchronous blocking (`.Result`, `.Wait()`)
 - **warning**: `System.Text.Json` usage (use Newtonsoft)
 - **warning**: Services created with `new` instead of DI
-- **warning**: Placeholder strings in production code (`"Endpoint not yet implemented"`)
+- **warning**: Placeholder strings in production code — but **not** the generator-mandated HATEOAS `Href = "Endpoint not yet implemented"`, which is established convention (see the §6 carve-out)
 - **info**: `TODO`/`HACK`/`FIXME` comments
 - **info**: `#region` blocks
 - ~~**info**: Unused `using` statements~~ — NOT flagged by this review (compiler/IDE handles it; see §3 note re: `Academic.Service.Client` / `IConfigSchoolClient`)

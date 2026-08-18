@@ -242,6 +242,11 @@ try {
         param($ev)
         try {
             if ($ev.type -eq 'assistant') {
+                # How many Agent blocks THIS message carried. Phase 2 must fan out all five reviewers in
+                # ONE message; the 2026-08-18 run dispatched them one-per-message (~1 min of dead wall
+                # clock each, ~5 min of a 12-min run). Per-message batch size makes that visible without
+                # doing timestamp arithmetic across the "Dispatched sub-agent #N" lines.
+                $agentBatch = 0
                 foreach ($block in $ev.message.content) {
                     if ($block.type -eq 'tool_use' -and ($block.name -eq 'Bash' -or $block.name -eq 'PowerShell')) {
                         $cmd = $block.input.command
@@ -256,6 +261,7 @@ try {
                     # internals don't stream, so surface the dispatch itself as a milestone.
                     if ($block.type -eq 'tool_use' -and ($block.name -eq 'Agent' -or $block.name -eq 'Task')) {
                         $script:m.AgentsDispatched++
+                        $agentBatch++
                         $sub = if ($block.input.subagent_type) { $block.input.subagent_type } else { 'agent' }
                         $desc = if ($block.input.description) { $block.input.description } else { '' }
                         Write-Milestone '>' "Dispatched sub-agent #$($script:m.AgentsDispatched) [$sub] $desc"
@@ -274,6 +280,9 @@ try {
                         # milestone count is right even if per-PR markers weren't emitted verbatim.
                         if ($txt -match '(?m)^\s*Reviewed:\s+(\d+)\b') { $script:m.Reviewed = [int]$Matches[1] }
                     }
+                }
+                if ($agentBatch -gt 0) {
+                    Write-Log "Sub-agent fan-out batch: $agentBatch dispatched in one message (Phase 2 must be 5; a lone Phase 4 verifier legitimately is 1)."
                 }
             }
             if ($ev.type -eq 'result') {
