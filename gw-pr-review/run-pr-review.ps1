@@ -198,7 +198,10 @@ try {
     }
 
     # ----- stream-json event parser (detailed log + PR-review milestones) ---
-    $script:m = @{ GhSeen=$false; GitSeen=$false; ReviewListSeen=$false; Reviewed=0; AgentsDispatched=0 }
+    # FanoutClaim/FanoutSeen: the orchestrator prints "FANOUT (PR #n): <k> reviewer(s) dispatched in this
+    # message" before Phase 2. Comparing that claim against the per-message Agent-block count turns a
+    # serialized fan-out into a greppable WARN instead of a note nobody reads (see Track-Milestones).
+    $script:m = @{ GhSeen=$false; GitSeen=$false; ReviewListSeen=$false; Reviewed=0; AgentsDispatched=0; FanoutClaim=0; FanoutSeen=0 }
     $script:TotalCostUsd = 0.0
 
     # NOTE: the parameter is $toolInput, NOT $input. `$input` is a PowerShell automatic variable
@@ -268,6 +271,12 @@ try {
                     }
                     if ($block.type -eq 'text' -and $block.text) {
                         $txt = $block.text
+                        # Remember how many reviewers the orchestrator SAYS it batched, so the
+                        # per-message Agent count below can contradict it. A new FANOUT line starts a
+                        # new fan-out (next PR), so reset the dispatched-so-far counter with it.
+                        if ($txt -match 'FANOUT \(PR #\d+\):\s*(\d+)\s*reviewer') {
+                            $script:m.FanoutClaim = [int]$Matches[1]; $script:m.FanoutSeen = 0
+                        }
                         if (-not $script:m.ReviewListSeen -and $txt -match 'PRs to review:\s*(.+)') {
                             $script:m.ReviewListSeen = $true; Write-Milestone '>' "PRs to review: $($Matches[1].Trim())"
                         }
@@ -282,7 +291,15 @@ try {
                     }
                 }
                 if ($agentBatch -gt 0) {
-                    Write-Log "Sub-agent fan-out batch: $agentBatch dispatched in one message (Phase 2 must be 5; a lone Phase 4 verifier legitimately is 1)."
+                    # Serialized only while the claimed batch is still incomplete -- once FanoutSeen has
+                    # caught up to the claim, a lone Agent call is a Phase 4 verifier and legitimate.
+                    $serialized = ($agentBatch -eq 1 -and $script:m.FanoutClaim -ge 2 -and $script:m.FanoutSeen -lt $script:m.FanoutClaim)
+                    $script:m.FanoutSeen += $agentBatch
+                    if ($serialized) {
+                        Write-Log ("WARN: fan-out SERIALIZED -- FANOUT marker claimed {0} reviewer(s) but this message carried 1 Agent call ({1}/{0} dispatched so far). Each split costs ~1 min of dead wall clock; see Phase 2 in pr-review-prompt.md." -f $script:m.FanoutClaim, $script:m.FanoutSeen)
+                    } else {
+                        Write-Log "Sub-agent fan-out batch: $agentBatch dispatched in one message (Phase 2 must be 5; a lone Phase 4 verifier legitimately is 1)."
+                    }
                 }
             }
             if ($ev.type -eq 'result') {

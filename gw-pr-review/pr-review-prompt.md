@@ -21,6 +21,12 @@ The user has **explicitly authorized this scheduled task to run the review auton
 You are running inside the user's main repo at `{{REPO_ROOT}}` on whatever branch the user left it on. The wrapper has already run `git fetch --prune origin` so `origin/main` and PR refs are current. Do not assume you are on `main` and do not change branches.
 
 - **GitHub access:** the `gh` CLI is authenticated for `nelnet-nbs`. Use it for all PR metadata, diffs, and file contents. If `gh auth status` fails, STOP (see Pre-flight).
+- **Shell & result size:** this is Windows — prefer the **PowerShell** tool. Git-Bash exists but ships a
+  minimal toolset: **`bc` is not installed** (`bc: command not found` silently emptied an evidence count in
+  the 2026-08-20 run), so count with `Measure-Object` / `(… | Group-Object).Count`, never shell arithmetic.
+  Keep every tool result under ~25 KB — anything larger is spilled to a temp file and costs an extra round
+  trip to re-read it: project `gh` output with `--jq`, aggregate `gh pr checks` with `Group-Object` instead
+  of dumping it raw, and bound repo-wide `Grep` sweeps with `head_limit` / `output_mode: files_with_matches`.
 - **Reference material on disk (read these; they are the review rubric):**
   - `{{SCHEDULED_DIR}}\pr-review-standards.md` — the authoritative coding-standards rulebook (REQUIRED=error, RECOMMENDED=warning, NICE-TO-HAVE=info). This is the primary source of truth for findings.
   - `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` — the GW GET endpoint conventions + "Endpoint Validation Checklist" + "Reference Object Rules". Apply this additionally to any PR that adds/changes a GET endpoint.
@@ -143,6 +149,12 @@ git update-ref -d refs/pr-review/<n>
 
 The sub-agents cannot fetch anything, so everything they need must come from this cached text.
 
+**Hold that text in a variable, never in a temp script file.** `$a = git show refs/pr-review/<n>:<path>` gives
+you an array you can slice for line-numbered excerpts (`"{0,4}: {1}" -f ($i+1), $a[$i]`). Do **not** redirect
+`git show` into `%TEMP%\<name>.ps1` or any other script-extension file — that write is blocked in this
+environment (`Access to the path … is denied`, and the follow-up read reported `lines: 0`), which cost a call
+in the 2026-08-20 run. The only temp file this task needs is the report JSON in "Render the HTML report".
+
 #### Phase 1b — Resolve & decompile the upstream client DTO(s) (orchestrator only; read-only)
 
 A Gateway GET endpoint is a thin wrapper over a domain microservice's **client library** (`{Domain}.Service.Client`), and the endpoint's `Output` is only correct if every property it advertises can actually be mapped from the upstream `{Resource}Dto`. The reviewers otherwise cannot tell a real field from an over-advertised one (e.g. an `Output` that inherits a `StudentReference` from its `Input` but the upstream DTO has no such field, so consumers will never receive it). So before fanning out, pull the real upstream contract and cache its text.
@@ -208,6 +220,10 @@ Ask the one question the rulebook cannot: **does this PR do what the ticket aske
 
 1. **Find the ticket id** in the PR title or head branch, in this order: `AB#(\d+)`, `story/(\d+)`,
    `(\d{6})-`. If none matches, skip this phase **silently** — many PRs legitimately have no ticket.
+   A head branch may carry **several** ids (`story/256280_256286_256302_256310`); the **first** is the
+   primary and the only one you must resolve. You may resolve the others, but an id that does not come back
+   is `not-found`, not an error: fold them into **one** line — `STORY-ALIGN SKIPPED (PR #<n>): ids <a>, <b>,
+   <c> not found in {{ADO_ORG}}` — instead of one raw error line per id (the 2026-08-20 run emitted four).
 2. **Gate on credentials.** If `{{ADO_ORG}}` is empty (the wrapper found no `ADO_PAT`, which is a normal
    and supported configuration), log `STORY-ALIGN SKIPPED (PR #<n>): no ADO credentials` and continue to
    Phase 2. **Never** attempt an interactive login — you are a non-interactive scheduled task.
@@ -218,8 +234,16 @@ Ask the one question the rulebook cannot: **does this PR do what the ticket aske
    `Invoke-RestMethod`:
 
    ```
-   https://dev.azure.com/{{ADO_ORG}}/{{ADO_PROJECT}}/_apis/wit/workitems/<id>?api-version=7.1&fields=System.Title,System.Description,Microsoft.VSTS.Common.AcceptanceCriteria,Microsoft.VSTS.TCM.SystemInfo
+   https://dev.azure.com/{{ADO_ORG}}/_apis/wit/workitems/<id>?api-version=7.1
    ```
+
+   Use the **org-scoped** URL above, not the project-scoped `…/{{ADO_ORG}}/{{ADO_PROJECT}}/_apis/…` form: it
+   resolves the id in any project the PAT can see, and the response's `System.TeamProject` tells you whether
+   it is `{{ADO_PROJECT}}`. Read `System.Title`, `System.State`, `System.Description` and
+   `Microsoft.VSTS.Common.AcceptanceCriteria` off the returned `.fields` object rather than requesting a
+   `fields=` allow-list — a field name the work-item type does not carry (e.g.
+   `Microsoft.VSTS.TCM.SystemInfo` on a User Story) also comes back as **404**, which is what made the
+   2026-08-20 run spend two calls on an id that existed.
 
    These fields are HTML — strip tags before reading them. On any error (404, expired PAT, wrong project),
    log `STORY-ALIGN SKIPPED (PR #<n>): <reason>` and continue. Never fail the PR over this.
