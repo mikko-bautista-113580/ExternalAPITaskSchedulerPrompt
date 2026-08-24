@@ -109,6 +109,18 @@ is rejected with the sibling file as evidence. The hand-maintained carve-out lis
 evidence check is additive. (Unused `using` directives remain a never-report: no sibling file can settle
 that, it needs a compiler.)
 
+Those siblings are also picked with an eye on **recency** — which matters most here, since 40+ services
+drifted apart before the architecture doc existed. Before scanning a folder, the orchestrator asks GitHub
+for the PRs the roster — Paul, Junie **and you** — merged into `sis-services` in the last 90 days, keeps
+the two closest to the PR's `Services.{Domain}/`, and prefers *their* files as the sibling sample. A
+sibling sourced that way is tagged `(from #<n>, merged by <author> <date>)` and the verifier is told to
+weigh a tagged sibling above an untagged one: it is code this team reviewed and merged recently, not just
+old code sitting nearby. It settles *convention* only — `microservices-architecture.md` still wins, and a
+merged PR that breaks a REQUIRED rule is still a valid finding. The lookup is capped (4 `gh` read calls,
+6 extra files), fully read-only, and non-fatal — if it finds nothing it logs
+`REFPR (PR #n): none in last 90d` and the plain `origin/main` scan carries the review. This is the
+**only** place merged PRs are consulted at all; what gets *reviewed* is still open PRs only.
+
 ## What gets reviewed
 
 A PR is reviewed only if:

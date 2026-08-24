@@ -1,4 +1,4 @@
-> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` / `{{ENV_FILE}}` (the first two may be **empty** — ADO credentials are optional, see Phase 1e; `{{ENV_FILE}}` is the file that holds `ADO_PAT`) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; paths default under your `%USERPROFILE%`.
+> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{ROSTER_AUTHORS}}` (the FULL roster **including you** — a convention reference only, never a review filter), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` / `{{ENV_FILE}}` (the first two may be **empty** — ADO credentials are optional, see Phase 1e; `{{ENV_FILE}}` is the file that holds `ADO_PAT`) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; roster authors = that same list **without** removing yourself; paths default under your `%USERPROFILE%`.
 
 You are running as a Windows scheduled task. Your job is to **perform a full semantic code review of open Pull Requests** in `nelnet-nbs/sis-externalapi` and **write a self-contained HTML report per PR** to a local output folder for the user to validate. **This is a READ-ONLY review: you do NOT comment on, approve, request changes to, or otherwise touch any PR on GitHub, and you do NOT modify the git working tree.** The only files you create are the HTML reports in the output folder (plus throwaway temp files).
 
@@ -21,6 +21,7 @@ The user has **explicitly authorized this scheduled task to run the review auton
 You are running inside the user's main repo at `{{REPO_ROOT}}` on whatever branch the user left it on. The wrapper has already run `git fetch --prune origin` so `origin/main` and PR refs are current. Do not assume you are on `main` and do not change branches.
 
 - **GitHub access:** the `gh` CLI is authenticated for `nelnet-nbs`. Use it for all PR metadata, diffs, and file contents. If `gh auth status` fails, STOP (see Pre-flight).
+  - **If a repo-scoped call returns `HTTP 403 "Resource protected by organization SAML enforcement"`** (the keyring token passed `gh auth status` but lost its SSO grant — this happened in the 2026-08-24 run), do NOT declare fatal and do NOT try the REST/GraphQL variants in turn: the wrapper already probes for this and exports `GH_TOKEN` from `GITHUB_TOKEN` in `{{ENV_FILE}}` when it can, so you inherit a working credential. If you still get 403, set it yourself once — `$env:GH_TOKEN = <the GITHUB_TOKEN value from {{ENV_FILE}}>` — retry, and note the fallback in the run summary. Only STOP if that fails too.
 - **Shell & result size:** this is Windows — prefer the **PowerShell** tool. Git-Bash exists but ships a
   minimal toolset: **`bc` is not installed** (`bc: command not found` silently emptied an evidence count in
   the 2026-08-20 run), so count with `Measure-Object` / `(… | Group-Object).Count`, never shell arithmetic.
@@ -193,6 +194,56 @@ The Phase 4 verifiers have **no tools**, so they cannot check what the rest of t
 which is exactly why the false-positive list below has to be hand-maintained. Fix that by caching the
 evidence now, while you still have git access.
 
+**First, find the roster's recently merged PRs — they say which convention is *current*.** The sibling
+rule below picks by file kind and folder, which finds convention but not *recent* convention: a file
+nobody has touched in two years ranks exactly the same as one the team merged last week. Correct for that by
+ranking the sibling candidates against what `{{ROSTER_AUTHORS}}` (the full roster — your teammates
+**and you**) has actually merged lately.
+
+```
+gh pr list --repo nelnet-nbs/sis-externalapi --state merged --limit 60 \
+  --search "author:<a> author:<b> author:<c> sort:updated-desc" \
+  --json number,title,author,mergedAt,url
+```
+
+Substitute one `author:<login>` per entry in `{{ROSTER_AUTHORS}}` — GitHub search ORs them, so this is
+**one** call. If `--search` exits clean but returns nothing, fall back to one
+`gh pr list --repo nelnet-nbs/sis-externalapi --state merged --author <login> --limit 15 --json number,title,author,mergedAt,url`
+per roster login. Both are read subcommands, so the hard prohibition on `gh` writes is untouched. And
+note this is the **one** place merged PRs are in scope at all: Step 1's `state == "OPEN"` filter still
+governs what gets *reviewed* — a merged PR is a reference here, never a review target.
+
+**An empty result is not proof of absence — check the exit code.** When the org-SSO grant on the `gh`
+token has lapsed, this call exits non-zero and prints the reason on *stderr* while stdout stays empty;
+piped through `--jq 'length'` it even prints a confident `0`. That is indistinguishable from "the roster
+merged nothing" if you only read stdout. So branch on the exit code and log the two cases separately —
+`REFPR (PR #<n>): lookup failed — <reason>` when the call errored, `... none in last 90d` only when it
+genuinely succeeded with no rows. Both continue with the `origin/main` scan; only one of them is worth
+a human's attention.
+
+Then:
+
+1. **Bound it.** Drop anything merged more than **90 days** ago. Rank what remains by area overlap
+   with the PR under review — same `Features/<Area>/` first — then by `mergedAt` descending. Keep the
+   **top 2**; these are the reference PRs. Get their paths with
+   `gh pr view <n> --json files -q '.files[].path'`.
+2. **Seed the picker.** When you choose the 2–3 same-kind siblings below, **prefer paths that appear
+   in a reference PR's file list**, read as always via `git show origin/main:<path>` — merged code is
+   already on `origin/main`, so this needs no PR ref and no extra fetch. Where there is no overlap the
+   `git ls-tree` scan below is the fallback, and `StudentsHomeroom` stays the last resort.
+3. **Tag the provenance.** Cache a seeded sibling as
+   `<path> (from #<m>, merged by <author> <YYYY-MM-DD>)`; leave scan-picked siblings as a bare path.
+   Phase 4 reads that tag.
+4. **Stay cheap, never block.** Cap the lookup at **4 `gh` calls** and **6 extra cached files**, skip
+   files over ~600 lines, and treat any failure here as non-fatal — log it and carry on with the plain
+   `origin/main` scan. This step sharpens the evidence; it must never cost you the review.
+5. **Log one line per PR**, in the same shape as the existing `SKIP` / `DEDUPE` / `STORY-ALIGN` lines:
+   - `REFPR (PR #<n>): #<m> by <author> merged <YYYY-MM-DD> — <k> sibling(s) sourced from it`
+   - `REFPR (PR #<n>): none in last 90d for <area> — using origin/main siblings`
+   - `REFPR (PR #<n>): lookup failed — <reason> — using origin/main siblings`
+
+**Now pick the siblings themselves.**
+
 For each **feature directory** touched by the PR, list its contents on `origin/main` and cache the text of
 **2–3 sibling files of each kind** the PR changes:
 
@@ -203,8 +254,9 @@ git show origin/main:<sibling path>                 # no ref needed — origin/m
 
 Pick siblings **of the same kind** as the changed file — `*Controller.cs` next to a changed controller,
 `*Query.cs`/`*Handler` next to a changed handler, `*Output.cs` next to a changed output, `*Tests.cs` next
-to a changed test. Prefer the same `Features/` area; otherwise fall back to the canonical
-`Features/People/StudentsHomeroom/**` reference feature, which is already the yardstick this review uses.
+to a changed test. Prefer the reference-PR paths from the step above, then the same `Features/` area;
+otherwise fall back to the canonical `Features/People/StudentsHomeroom/**` reference feature, which is
+already the yardstick this review uses.
 Cap it at **3 files per kind** and skip any file over ~600 lines — this is a convention sample, not a
 second review.
 
@@ -309,7 +361,13 @@ For a PR that adds/changes a **GET endpoint**, also give **R2** the "Endpoint Va
    > *"Before reporting any finding of the form 'X is missing' or 'X should be added', confirm X is
    > genuinely absent from the PR's changed-file list inlined above. If X is present in this PR, the
    > finding is invalid — drop it. **Never suggest adding something that already exists.**"*
-7. The instruction: *"Return ONLY a JSON array of finding objects (no prose, no tool calls). Prefer fewer, high-confidence findings with concrete `file:line`. If nothing, return `[]`."*
+7. **The `CONVENTION REFERENCE` line** — the reference PRs from Phase 1d, one per line as
+   `#<m> — <author> — merged <YYYY-MM-DD> — <overlapping paths>`, under this note: *"These are the most
+   recent PRs this team merged in the same area, so their files are the convention the team currently
+   accepts, and the Phase 4 verifier will weigh your structural findings against them. Raise a
+   structural deviation only where you are confident it breaks a real rule rather than matching this
+   team's house style."* Write `CONVENTION REFERENCE: none in last 90d` when Phase 1d found nothing.
+8. The instruction: *"Return ONLY a JSON array of finding objects (no prose, no tool calls). Prefer fewer, high-confidence findings with concrete `file:line`. If nothing, return `[]`."*
 
 The concrete rubric checks a careful reviewer looks for (distribute to the owning reviewer): feature-based placement + MediatR delegation + `sealed` query/command with nested `Handler` (R1); controller inherits `ExternalApiController`, `[Authorize(AuthenticationSchemes="ApiAuthentication")]` + `[Authorize(Roles="{Domain}Read")]`, `[ApiVersion]`/`[MapToApiVersion]`, `[ProducesResponseType]`, `CancellationToken` on actions, write verbs carry `{Domain}Write` (R2); `QuerySanitizer.Sanitize()`, `AddSchoolCodeFilterAsync`/`AddConfigSchoolIdFilterAsync`, `ApimHelper.GetApimNextUrl()`, `CancellationToken` threaded (R1); `Output` matches the ticket's ViewModels, **every `Output` property is mappable from the upstream `{Resource}Dto` decompiled in Phase 1b — flag any `Output` (or inherited-from-`Input`) property with NO corresponding source field on the upstream DTO as a `warning` (category `DTO & Model`): the contract advertises data the source can never populate (this is exactly the `StudentReference`-never-populated class of bug); conversely note any upstream field the ticket's ViewModels expect but the `Output` drops** (calibrate confidence to the Phase-1b fidelity level — do NOT raise a hard mapping finding when Phase 1b logged the XML-doc-only or skipped fallback, downgrade to `info` phrased as "could not fully verify against upstream DTO"), HATEOAS `ReferenceLink` uses REAL endpoint URLs **only for the reference types the generator spec defines a URL for** (`GradeLevelReference`, `SchoolYearReference`, `SchoolIdReference`, `StudentReference`, `ClassReference`, `FamilyReference`, `CourseReference`) — the generator *mandates* `Href = "Endpoint not yet implemented"` for any other reference, so that placeholder is established convention and must NOT be flagged (see the §6 carve-out), `[ExcludeFromCodeCoverage]`, `[ApplySieve]` on paged outputs (R3); no empty catch, no `async void`, no sync blocking (`.Result`/`.Wait()`/`.GetAwaiter().GetResult()`) — but `.Results` (plural, `PagedResult.Results`) is NOT a violation — `Result.Fail(...)` carries `.WithMetadata("StatusCode", …)`, Newtonsoft not `System.Text.Json`, DI over `new Service()`, no leftover `TODO`/`HACK`/`FIXME`/`#region` (R4); and — per §15 — if `PublicChangeLog.md` changed, emit **exactly ONE consolidated `info` finding** (category `Documentation`) covering all its issues at once (wrong/stale date, duplicate entry, raw `AB#…` work-item bullet, missing blank line), never one finding per issue (R4); NUnit + NSubstitute (flag Moq), `[Retry(2)]` + real `[TestCaseId("NNNNNN")]` (never invented), `public` test classes, `FixtureBuilder.GetGatewayClient()`, `.AddQuery()` not query-string-in-URL, typed `Should().BeInAscendingOrder(...)`, FluentAssertions not classic `Assert.*` (but `Assert.IsEmpty` is allowed), DistrictWide happy-path asserts `PageSize.Should().Be(50)`, a new feature file with no matching `SISApi.APITests` test is a warning, no hardcoded bearer tokens (error) (R5).
 
@@ -357,7 +415,11 @@ verbatim:
 > *"Below are 2–3 files of the same kind that already exist in this codebase on `origin/main`. If the PR
 > does the same thing these siblings already do, then the pattern the finding objects to is **established
 > local convention**, and the finding is a false positive — return `REJECTED` with the sibling file and
-> line that demonstrates it. Established convention beats a generic rule."*
+> line that demonstrates it. Established convention beats a generic rule.
+>
+> Where a sibling carries a `(from #<m>, merged by <author> <date>)` tag, that file is code this team
+> reviewed and merged on that date — it is the convention the team currently accepts, not merely old
+> code that happens to sit nearby. Weigh a tagged sibling above an untagged one."*
 
 This is **additive** — the verifier still receives the full false-positive guard list. The list catches the
 cases already known; the sibling evidence catches the ones nobody has written down yet. Where Phase 1d

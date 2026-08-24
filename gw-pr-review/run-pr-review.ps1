@@ -61,6 +61,38 @@ if (-not (Test-Path $OutputDir))    { New-Item -ItemType Directory -Path $Output
 
 Set-Location $RepoRoot
 
+# ---- credentials from ~/repos/.env (parsed once; both consumers are below) --
+# GITHUB_TOKEN -> SAML/SSO fallback for gh (see the repo-scoped probe below).
+# ADO_PAT      -> OPTIONAL story-alignment check only.
+# The review itself needs no ADO access. When ~/repos/.env supplies ADO_PAT we ALSO
+# hand the prompt the org/project so Phase 1e can read the PR's ticket and sanity-check
+# that the PR built what was asked for (read-only; informational; never blocking).
+# A missing PAT is a SUPPORTED configuration -- warn and pass empty placeholders so the
+# prompt's gate skips that phase cleanly. NEVER make this fatal: it would break every
+# existing install that has no ADO_PAT.
+$AdoOrg = ''; $AdoProject = ''; $GhPat = ''
+$EnvFile = $cfg.envFile
+if (Test-Path $EnvFile) {
+    $envMap = @{}
+    Get-Content $EnvFile | ForEach-Object {
+        $t = $_.Trim()
+        if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
+            $k, $v = $t -split '=', 2
+            $envMap[$k.Trim()] = $v.Trim().Trim('"').Trim("'")
+        }
+    }
+    if ($envMap['GITHUB_TOKEN']) { $GhPat = $envMap['GITHUB_TOKEN'] }
+    if ($envMap['ADO_PAT']) {
+        $AdoOrg     = if ($envMap['ADO_ORG'])     { $envMap['ADO_ORG'] }     else { 'renweb' }
+        $AdoProject = if ($envMap['ADO_PROJECT']) { $envMap['ADO_PROJECT'] } else { 'ColdFusion' }
+        Write-Log "ADO creds found -- story-alignment enabled ($AdoOrg/$AdoProject)."
+    } else {
+        Write-Log "WARN: no ADO_PAT in $EnvFile -- story-alignment check will be skipped (review is unaffected)."
+    }
+} else {
+    Write-Log "WARN: env file not found at $EnvFile -- story-alignment check will be skipped (review is unaffected)."
+}
+
 # gh must be authenticated for nelnet-nbs. Fail fast with an actionable message.
 $ghOk = $false
 try {
@@ -78,46 +110,52 @@ if (-not $ghOk) {
     exit 1
 }
 
+# ---- SAML SSO probe: can the active credential actually reach the repo? -----
+# 'gh auth status' only proves a token EXISTS; it does NOT prove that token is still
+# SSO-authorized for nelnet-nbs. In the 2026-08-24 10:00 run the keyring token passed
+# 'gh auth status' but every repo-scoped call -- git fetch, all 3 'gh pr list' pre-check
+# attempts, and the agent's own REST + GraphQL calls -- returned HTTP 403 "Resource
+# protected by organization SAML enforcement". The pre-check therefore could not prove
+# "nothing to do", so a full claude launch ($0.78) was spent discovering 0 reviewable PRs.
+# Probe once with a cheap repo-scoped read and, on failure, fall back to GITHUB_TOKEN from
+# the env file (a classic PAT keeps its SSO grant; the agent proved this fallback works).
+# Setting GH_TOKEN here fixes git fetch, the pre-check, AND the claude child process, which
+# inherits this environment -- so the agent no longer has to rediscover the fallback itself.
+$ghProbe = gh api 'repos/nelnet-nbs/sis-externalapi' --jq '.full_name' 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    Write-Log ("WARN: 'gh auth status' passed but the repo-scoped probe failed -- " + ($ghProbe.Trim() -replace '\s+', ' '))
+    if ($GhPat) {
+        $env:GH_TOKEN = $GhPat
+        $env:GITHUB_TOKEN = $GhPat
+        $ghProbe = gh api 'repos/nelnet-nbs/sis-externalapi' --jq '.full_name' 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "Fell back to GITHUB_TOKEN from $EnvFile -- repo access restored ($($ghProbe.Trim()))."
+        } else {
+            Remove-Item Env:GH_TOKEN     -ErrorAction SilentlyContinue
+            Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+            Write-Log ("WARN: GITHUB_TOKEN from $EnvFile cannot reach the repo either -- " + ($ghProbe.Trim() -replace '\s+', ' '))
+            Write-Log "       Fix once (interactively): authorize the token for the 'nelnet-nbs' org SSO. See $ScheduledDir\README-pr-review.md."
+        }
+    } else {
+        Write-Log "       No GITHUB_TOKEN in $EnvFile to fall back to. Fix once (interactively): re-authorize the gh token for the 'nelnet-nbs' org SSO."
+    }
+}
+
 # ---- identity: who is running this, and whose PRs they review --------------
 # reviewAuthors = team roster minus the current user (auto-detected via gh).
 try {
     $meLogin       = Get-CurrentGitHubLogin
     $reviewAuthors = @(Get-ReviewAuthors -CurrentLogin $meLogin)
+    # rosterAuthors = the FULL roster, self INCLUDED. Not a review filter -- it is only
+    # used as a convention reference (recently merged roster PRs seed the sibling picker).
+    $rosterAuthors = @((Get-TeamRoster) | ForEach-Object { $_.github })
     Write-Log "Current user (gh): $meLogin"
     Write-Log "Reviewing PRs by:  $($reviewAuthors -join ', ')"
+    Write-Log "Convention refs:   $($rosterAuthors -join ', ') (merged PRs; self included)"
 } catch {
     Write-Milestone 'X' "Could not resolve identity from roster/gh -- aborting."
     Write-Log "FATAL: $_"
     exit 1
-}
-
-# ---- OPTIONAL ADO credentials (story-alignment check only) ------------------
-# The review itself needs no ADO access. When ~/repos/.env supplies ADO_PAT we ALSO
-# hand the prompt the org/project so Phase 1e can read the PR's ticket and sanity-check
-# that the PR built what was asked for (read-only; informational; never blocking).
-# A missing PAT is a SUPPORTED configuration -- warn and pass empty placeholders so the
-# prompt's gate skips that phase cleanly. NEVER make this fatal: it would break every
-# existing install that has no ADO_PAT.
-$AdoOrg = ''; $AdoProject = ''
-$EnvFile = $cfg.envFile
-if (Test-Path $EnvFile) {
-    $envMap = @{}
-    Get-Content $EnvFile | ForEach-Object {
-        $t = $_.Trim()
-        if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
-            $k, $v = $t -split '=', 2
-            $envMap[$k.Trim()] = $v.Trim().Trim('"').Trim("'")
-        }
-    }
-    if ($envMap['ADO_PAT']) {
-        $AdoOrg     = if ($envMap['ADO_ORG'])     { $envMap['ADO_ORG'] }     else { 'renweb' }
-        $AdoProject = if ($envMap['ADO_PROJECT']) { $envMap['ADO_PROJECT'] } else { 'ColdFusion' }
-        Write-Log "ADO creds found -- story-alignment enabled ($AdoOrg/$AdoProject)."
-    } else {
-        Write-Log "WARN: no ADO_PAT in $EnvFile -- story-alignment check will be skipped (review is unaffected)."
-    }
-} else {
-    Write-Log "WARN: env file not found at $EnvFile -- story-alignment check will be skipped (review is unaffected)."
 }
 
 # ---- concurrency guard -----------------------------------------------------
@@ -141,8 +179,9 @@ try {
 
     # Fetch is read-only w.r.t. the working tree; makes origin/main + PR refs current.
     Write-Log "Fetching origin (prune) ..."
+    $fetchOk = $true
     git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
-    if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
+    if ($LASTEXITCODE -ne 0) { $fetchOk = $false; Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
 
     # Snapshot existing reports so we can report just this run's output.
     $reportsBefore = @{}
@@ -365,13 +404,25 @@ try {
     if ($skipClaude) {
         Write-Log "Skipping claude launch -- nothing new to review (all eligible PRs already have a report)."
     } else {
-        Write-Milestone 'v' "Pre-flight passed (gh authenticated, origin fetched)."
+        # Report what actually happened. The 2026-08-24 10:00 run printed the unconditional
+        # "Pre-flight passed (gh authenticated, origin fetched)" milestone directly under a
+        # failed git fetch and three failed 'gh pr list' attempts -- the one line a human
+        # skims said the opposite of the truth.
+        if ($fetchOk) {
+            Write-Milestone 'v' "Pre-flight passed (gh authenticated, origin fetched)."
+        } else {
+            Write-Milestone '!' "Pre-flight DEGRADED: gh authenticated but 'git fetch origin' failed -- PR refs may be stale (see WARN above)."
+        }
         Write-Milestone '>' "Launching claude (model=$Model) for read-only PR review..."
 
         $Prompt = Get-Content $PromptFile -Raw
         # Fill identity/path placeholders so the prompt reflects whoever is running.
         # .Replace() is literal (no regex/backslash/$ pitfalls with Windows paths).
         $Prompt = $Prompt.Replace('{{REVIEW_AUTHORS}}', ($reviewAuthors -join ', '))
+        # Full roster INCLUDING the current user -- deliberately different from {{REVIEW_AUTHORS}}.
+        # Used only to find recently merged roster PRs as a convention reference, never to pick
+        # which PRs get reviewed (your own open PRs are still never reviewed).
+        $Prompt = $Prompt.Replace('{{ROSTER_AUTHORS}}', ($rosterAuthors -join ', '))
         $Prompt = $Prompt.Replace('{{CURRENT_USER}}',   $meLogin)
         $Prompt = $Prompt.Replace('{{OUTPUT_DIR}}',     $OutputDir)
         $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}',  $ScheduledDir)

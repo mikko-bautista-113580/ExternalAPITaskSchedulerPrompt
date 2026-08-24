@@ -77,13 +77,41 @@ if (-not $ghOk) {
     exit 1
 }
 
+# `gh auth status` proves a token EXISTS -- it does not prove the org's SAML/SSO grant on that
+# token is still in place. On 2026-08-24 auth status passed cleanly while every org-scoped read
+# returned "HTTP 403 -- Resource protected by organization SAML enforcement": the run fetched,
+# launched claude, aborted at Step 1 and cost $0.64 for zero reviews. So probe one cheap
+# org-scoped read here -- the same check README step 1 tells humans to run. A SAML/SSO rejection
+# cannot be repaired inside a headless run (it needs a browser), so abort before spending a
+# launch. Any OTHER failure (transient network, rate limit) still falls through to the launch.
+$ghProbe = gh api "repos/$Repo" --jq .full_name 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    Write-Log ("Org-read probe 'gh api repos/$Repo' failed (exit=$LASTEXITCODE):`n" + $ghProbe.Trim())
+    if ($ghProbe -match 'SAML|single sign|sso\?authorization_request') {
+        Write-Milestone 'X' "gh token is not SSO-authorized for $Repo -- aborting before launching claude."
+        Write-Log "FATAL: gh token lacks the org SAML/SSO grant; every PR read would return HTTP 403."
+        Write-Log "       Fix once (interactively): open the SSO URL gh printed above, or re-run"
+        Write-Log "       'gh auth login' and complete the Authorize step for the org."
+        Write-Log "       Verify with: gh api repos/$Repo --jq .full_name"
+        Write-Log "       See $ScheduledDir\README-ms-pr-review.md (step 1)."
+        exit 1
+    }
+    Write-Log "WARN: probe failure does not look like SAML/SSO -- continuing; the prompt will decide."
+} else {
+    Write-Log "Org-read probe OK: $($ghProbe.Trim())"
+}
+
 # ---- identity: who is running this, and whose PRs they review --------------
 # reviewAuthors = team roster minus the current user (auto-detected via gh).
 try {
     $meLogin       = Get-CurrentGitHubLogin
     $reviewAuthors = @(Get-ReviewAuthors -CurrentLogin $meLogin)
+    # rosterAuthors = the FULL roster, self INCLUDED. Not a review filter -- it is only
+    # used as a convention reference (recently merged roster PRs seed the sibling picker).
+    $rosterAuthors = @((Get-TeamRoster) | ForEach-Object { $_.github })
     Write-Log "Current user (gh): $meLogin"
     Write-Log "Reviewing PRs by:  $($reviewAuthors -join ', ')"
+    Write-Log "Convention refs:   $($rosterAuthors -join ', ') (merged PRs; self included)"
 } catch {
     Write-Milestone 'X' "Could not resolve identity from roster/gh -- aborting."
     Write-Log "FATAL: $_"
@@ -191,11 +219,15 @@ try {
     # claude launch. Skipped on a no-op run: the pre-check above reads only `gh pr list` (network)
     # and local report filenames, so it has no dependency on local refs -- and most scheduled
     # slots skip, so fetching first made every no-op run pay for a fetch nothing consumed.
+    # $null = never attempted (no-op run); $true/$false = origin refs are/aren't current.
+    # Read by the pre-flight milestone below so it can't claim "origin fetched" after a failure.
+    $fetchOk = $null
     if (-not $skipClaude) {
         Write-Log "Fetching origin (prune) ..."
         $fetchOut  = git fetch --prune origin 2>&1
         $fetchExit = $LASTEXITCODE
         $fetchOut | ForEach-Object { Write-Log "[git fetch] $_" }
+        $fetchOk = ($fetchExit -eq 0)
         if ($fetchExit -ne 0) {
             if (@($fetchOut | ForEach-Object { "$_" }) -match "\.lock': File exists") {
                 # Case-colliding remote-tracking refs (origin/Bug/x vs origin/bug/x) cannot both
@@ -204,6 +236,12 @@ try {
                 # so this is cosmetic. One-time cure, by a human, in the target repo:
                 #   git update-ref -d refs/remotes/origin/Bug/<colliding-branch>
                 Write-Log "NOTE: --prune could not delete case-colliding remote refs (Windows case-insensitive FS); origin/main + PR refs are still current. Not retrying -- it cannot succeed."
+                $fetchOk = $true
+            } elseif (@($fetchOut | ForEach-Object { "$_" }) -match 'SAML|error: 403|returned error: 403|Authentication failed|could not read Username') {
+                # git uses the OS credential manager, which can go stale independently of the gh
+                # token. On 2026-08-24 both retries returned the same SAML 403 seven seconds apart:
+                # an auth rejection is deterministic, so a retry only burns wall-clock.
+                Write-Log "NOTE: git fetch was rejected by GitHub authentication (SAML/SSO or 403), not a ref lock. Not retrying -- it cannot succeed. Re-authorize the token for the org; see $ScheduledDir\README-ms-pr-review.md."
             } else {
                 # A concurrent git process (sibling automation on the same repo, or the user's IDE)
                 # can update refs mid-fetch, giving "cannot lock ref ...: is at X but expected Y".
@@ -212,6 +250,7 @@ try {
                 Start-Sleep -Seconds 5
                 git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
                 if ($LASTEXITCODE -ne 0) { Write-Log "WARN: git fetch retry also failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
+                else { $fetchOk = $true }
             }
         }
     }
@@ -355,7 +394,12 @@ try {
     if ($skipClaude) {
         Write-Log "Skipping claude launch -- nothing new to review (all eligible PRs already have a report)."
     } else {
-        Write-Milestone 'v' "Pre-flight passed (gh authenticated, origin fetched)."
+        # Report what actually happened: on 2026-08-24 this line claimed "origin fetched"
+        # immediately after two 403 fetch failures, which read as a green pre-flight in the log.
+        $fetchNote = if ($fetchOk -eq $true) { 'origin fetched' }
+                     elseif ($null -eq $fetchOk) { 'fetch skipped' }
+                     else { 'origin fetch FAILED -- refs may be stale, see WARN above' }
+        Write-Milestone 'v' "Pre-flight passed (gh authenticated, $fetchNote)."
         Write-Milestone '>' "Launching claude (model=$Model) for read-only PR review..."
 
         $branchAtLaunch = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
@@ -365,6 +409,10 @@ try {
         # Fill identity/path placeholders so the prompt reflects whoever is running.
         # .Replace() is literal (no regex/backslash/$ pitfalls with Windows paths).
         $Prompt = $Prompt.Replace('{{REVIEW_AUTHORS}}', ($reviewAuthors -join ', '))
+        # Full roster INCLUDING the current user -- deliberately different from {{REVIEW_AUTHORS}}.
+        # Used only to find recently merged roster PRs as a convention reference, never to pick
+        # which PRs get reviewed (your own open PRs are still never reviewed).
+        $Prompt = $Prompt.Replace('{{ROSTER_AUTHORS}}', ($rosterAuthors -join ', '))
         $Prompt = $Prompt.Replace('{{CURRENT_USER}}',   $meLogin)
         $Prompt = $Prompt.Replace('{{OUTPUT_DIR}}',     $OutputDir)
         $Prompt = $Prompt.Replace('{{SCHEDULED_DIR}}',  $ScheduledDir)

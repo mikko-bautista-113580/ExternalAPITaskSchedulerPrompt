@@ -1,4 +1,4 @@
-> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, `{{ENV_FILE}}` (where `ADO_PAT` lives), and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` (may be **empty** — ADO credentials are optional, see Phase 1c) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; paths default under your `%USERPROFILE%`.
+> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{ROSTER_AUTHORS}}` (the FULL roster **including you** — a convention reference only, never a review filter), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, `{{ENV_FILE}}` (where `ADO_PAT` lives), and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` (may be **empty** — ADO credentials are optional, see Phase 1c) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; roster authors = that same list **without** removing yourself; paths default under your `%USERPROFILE%`.
 
 You are running as a Windows scheduled task. Your job is to **perform a full semantic code review of open Pull Requests** in `nelnet-nbs/sis-services` (the SIS microservices monorepo) and **write a self-contained HTML report per PR** to a local output folder for the user to validate. **This is a READ-ONLY review: you do NOT comment on, approve, request changes to, or otherwise touch any PR on GitHub, and you do NOT modify the git working tree.** The only files you create are the HTML reports in the output folder (plus throwaway temp files).
 
@@ -136,6 +136,61 @@ The Phase 4 verifiers have **no tools**, so they cannot check what the rest of t
 which is exactly why the false-positive list below has to be hand-maintained. Fix that by caching the
 evidence now, while you still have git access.
 
+**First, find the roster's recently merged PRs — they say which convention is *current*.** The sibling
+rule below picks by file kind and folder, which finds convention but not *recent* convention: a file
+nobody has touched in two years ranks exactly the same as one the team merged last week. That matters
+more in this monorepo than anywhere, because 40+ services drifted apart before the architecture doc
+existed. Rank the sibling candidates against what `{{ROSTER_AUTHORS}}` (the full roster — your
+teammates **and you**) has actually merged lately.
+
+```
+gh pr list --repo nelnet-nbs/sis-services --state merged --limit 60 \
+  --search "author:<a> author:<b> author:<c> sort:updated-desc" \
+  --json number,title,author,mergedAt,url
+```
+
+Substitute one `author:<login>` per entry in `{{ROSTER_AUTHORS}}` — GitHub search ORs them, so this is
+**one** call. If `--search` exits clean but returns nothing, fall back to one
+`gh pr list --repo nelnet-nbs/sis-services --state merged --author <login> --limit 15 --json number,title,author,mergedAt,url`
+per roster login. Both are read subcommands, so the hard prohibition on `gh` writes is untouched. And
+note this is the **one** place merged PRs are in scope at all: Step 1's `state == "OPEN"` filter still
+governs what gets *reviewed* — a merged PR is a reference here, never a review target.
+
+**An empty result is not proof of absence — check the exit code.** When the org-SSO grant on the `gh`
+token has lapsed, this call exits non-zero and prints the reason on *stderr* while stdout stays empty;
+piped through `--jq 'length'` it even prints a confident `0`. That is indistinguishable from "the roster
+merged nothing" if you only read stdout. So branch on the exit code and log the two cases separately —
+`REFPR (PR #<n>): lookup failed — <reason>` when the call errored, `... none in last 90d` only when it
+genuinely succeeded with no rows. Both continue with the `origin/main` scan; only one of them is worth
+a human's attention.
+
+Then:
+
+1. **Bound it.** Drop anything merged more than **90 days** ago. Rank what remains by area overlap
+   with the PR under review — same `src\Services.{Domain}\` first — then by `mergedAt` descending.
+   Keep the **top 2**; these are the reference PRs. Get their paths with
+   `gh pr view <n> --json files -q '.files[].path'`.
+2. **Seed the picker.** When you choose the 2–3 same-kind siblings below, **prefer paths that appear
+   in a reference PR's file list**, read as always via `git show origin/main:<path>` — merged code is
+   already on `origin/main`, so this needs no PR ref and no extra fetch. Where there is no overlap the
+   `git ls-tree` scan below is the fallback, and the nearest sibling service stays the last resort.
+3. **Tag the provenance.** Cache a seeded sibling as
+   `<path> (from #<m>, merged by <author> <YYYY-MM-DD>)`; leave scan-picked siblings as a bare path.
+   Phase 4 reads that tag.
+4. **A merged reference never outranks the architecture doc.** These PRs show accepted *convention*,
+   which settles false positives about structure and naming. They do **not** license a REQUIRED
+   violation: `microservices-architecture.md` still wins, and a merged PR that breaks a REQUIRED rule
+   is still a valid finding.
+5. **Stay cheap, never block.** Cap the lookup at **4 `gh` calls** and **6 extra cached files**, skip
+   files over ~600 lines, and treat any failure here as non-fatal — log it and carry on with the plain
+   `origin/main` scan. This step sharpens the evidence; it must never cost you the review.
+6. **Log one line per PR**, in the same shape as the existing `SKIP` / `DEDUPE` / `STORY-ALIGN` lines:
+   - `REFPR (PR #<n>): #<m> by <author> merged <YYYY-MM-DD> — <k> sibling(s) sourced from it`
+   - `REFPR (PR #<n>): none in last 90d for <area> — using origin/main siblings`
+   - `REFPR (PR #<n>): lookup failed — <reason> — using origin/main siblings`
+
+**Now pick the siblings themselves.**
+
 For each **feature/service directory** touched by the PR, list its contents on `origin/main` and cache the
 text of **2–3 sibling files of each kind** the PR changes:
 
@@ -145,8 +200,9 @@ git show origin/main:<sibling path>                 # no ref needed — origin/m
 ```
 
 Pick siblings **of the same kind** as the changed file — `*Controller.cs` next to a changed controller,
-`*QueryV1.cs`/`*Handler` next to a changed handler, `*Tests.cs` next to a changed test. Prefer files in
-the same `Services.{Domain}/`; fall back to the nearest sibling service if the feature folder is new.
+`*QueryV1.cs`/`*Handler` next to a changed handler, `*Tests.cs` next to a changed test. Prefer the
+reference-PR paths from the step above, then files in the same `Services.{Domain}/`; fall back to the
+nearest sibling service if the feature folder is new.
 Cap it at **3 files per kind** and skip any file over ~600 lines — this is a convention sample, not a
 second review.
 
@@ -223,7 +279,14 @@ Before dispatching, **read `{{REPO_ROOT}}\.architecture\microservices-architectu
    > *"Before reporting any finding of the form 'X is missing' or 'X should be added', confirm X is
    > genuinely absent from the PR's changed-file list inlined above. If X is present in this PR, the
    > finding is invalid — drop it. **Never suggest adding something that already exists.**"*
-8. The instruction: *"Return ONLY a JSON array of finding objects (no prose, no tool calls). Prefer fewer, high-confidence findings with concrete `file:line`. If nothing, return `[]`."*
+8. **The `CONVENTION REFERENCE` line** — the reference PRs from Phase 1b, one per line as
+   `#<m> — <author> — merged <YYYY-MM-DD> — <overlapping paths>`, under this note: *"These are the most
+   recent PRs this team merged in the same service, so their files are the convention the team currently
+   accepts, and the Phase 4 verifier will weigh your structural findings against them. Raise a
+   structural deviation only where you are confident it breaks a real rule rather than matching this
+   team's house style. This never softens a REQUIRED rule — see item 4 above."* Write
+   `CONVENTION REFERENCE: none in last 90d` when Phase 1b found nothing.
+9. The instruction: *"Return ONLY a JSON array of finding objects (no prose, no tool calls). Prefer fewer, high-confidence findings with concrete `file:line`. If nothing, return `[]`."*
 
 The concrete rubric checks a careful reviewer looks for (distribute to the owning reviewer): feature-based placement under `Features/{Feature}/Commands|Queries`, nested `Handler` (`internal sealed`) inside a `public` request class, and the **return-type-by-operation split — queries return `PagedResult<{Dto}>` DIRECTLY (never demand `ActionResult<T>` on a query), commands return `ActionResult<{Dto}>`** — plus FluentResults for *command* internal control flow mapped to `ActionResult` at the boundary (R1); endpoint-level `[Route("api/[Controller]/v{version:apiVersion}")]` + `[ApiVersion]`/`[MapToApiVersion]` + `...V1`/`...V2` action suffixes + `[Obsolete]`/`Deprecated` checked in C# source, thin-MediatR controller (base class **varies** — `AbstractMicroserviceController`/primary-ctor/`ControllerBase` all fine), and the architecture doc's **REQUIRED** class-level `[Authorize]` on new/changed controllers (missing it is an `error` even under a global policy; only `[AllowAnonymous]` with a reason is exempt), no hardcoded tokens/creds/IDs (R2); district resolution never bypassed (`x-districtCode` → Redis → `SIS.EFCore.RedisDistrict`), `DistrictId` predicate on migrated services, Create/Update/Delete write an `ActivityLog`, `DbContext`-direct by default (repository only when reused/complex), class-level `[ApplySieve]` + `GetPagedAsync` → `PagedResult<T>` + `AsNoTracking()` (both `ISieveService` 3-arg and `ISieveProcessor` 4-arg valid) (R3); no empty catch / no `async void` / no `.Result`/`.Wait()`/`.GetAwaiter().GetResult()` — but `.Results` (plural, `PagedResult.Results`) is NOT a violation — `CancellationToken` threaded through EF/downstream, FluentValidation with `.WithMessage(...)`, file/class name match, `Async` suffix, `_camelCase` private fields, constructor injection (no `new Service()`), DI registered in `.Infrastructure` (R4); the **two MS test tiers that normally ship together** — *unit* (`internal … : UnitTestFixture`, NUnit `Handle_{Scenario}_{Expected}`, in-memory `_context`, `await HandleRequest(query)`, **no Verify / no `[TestCaseId]`**) and *integration/API* (`internal … : ApiTest` on `IntegrationTestSdk` + **Verify snapshot** `Verifier.Verify(...)` with a committed `*.verified.txt` (scrub volatile fields) + real `[TestCaseId("NNNNNN")]` + a Bogus `{Entity}Faker` seeded with `UseSeed(ApiTestConstants.BogusFakerSeedId)`, `.AddQuery(...)` not query-in-URL) — flagging: only one tier shipped, a GET-list integration test with no `Verifier.Verify`/paired `*.verified.txt`, a committed `*.received.txt` (error), an unseeded Faker (flaky), hardcoded bearer tokens (error) (R5).
 
@@ -277,7 +340,14 @@ verbatim:
 > *"Below are 2–3 files of the same kind that already exist in this service on `origin/main`. If the PR
 > does the same thing these siblings already do, then the pattern the finding objects to is **established
 > local convention**, and the finding is a false positive — return `REJECTED` with the sibling file and
-> line that demonstrates it. Established convention beats a generic rule."*
+> line that demonstrates it. Established convention beats a generic rule.
+>
+> Where a sibling carries a `(from #<m>, merged by <author> <date>)` tag, that file is code this team
+> reviewed and merged on that date — it is the convention the team currently accepts, not merely old
+> code that happens to sit nearby. Weigh a tagged sibling above an untagged one. This settles questions
+> of convention only: a tagged sibling never licenses a REQUIRED violation, because
+> `microservices-architecture.md` still wins and a merged PR that breaks a REQUIRED rule is still a
+> valid finding."*
 
 This is **additive** — the verifier still receives the full false-positive carve-out list. The list catches
 the cases already known; the sibling evidence catches the ones nobody has written down yet. Where Phase 1b
