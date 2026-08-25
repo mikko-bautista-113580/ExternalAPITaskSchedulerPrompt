@@ -434,6 +434,11 @@ try {
         # the admission-ms / morning-gw prompts). Without it the agent probes $env:ADO_PAT, finds it
         # empty, and skips story-alignment even though the wrapper just logged "ADO creds found".
         $Prompt = $Prompt.Replace('{{ENV_FILE}}',       $EnvFile)
+        # Did the pre-flight fetch above actually work? Without this the prompt asserted "the wrapper has
+        # already run git fetch --prune so PR refs are current" unconditionally, so in a DEGRADED run the
+        # agent re-ran `git fetch origin pull/<n>/head` and hit the same SAML 403 (exit 128), then had to
+        # re-plan onto `gh api .../contents?ref=<sha>` mid-review. Hand it the truth up front.
+        $Prompt = $Prompt.Replace('{{FETCH_STATUS}}',   $(if ($fetchOk) { 'ok' } else { 'failed' }))
         try {
             $Prompt | & $ClaudeCmd `
                 --print `

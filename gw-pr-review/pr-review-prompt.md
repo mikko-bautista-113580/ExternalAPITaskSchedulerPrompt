@@ -1,4 +1,4 @@
-> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{ROSTER_AUTHORS}}` (the FULL roster **including you** — a convention reference only, never a review filter), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` / `{{ENV_FILE}}` (the first two may be **empty** — ADO credentials are optional, see Phase 1e; `{{ENV_FILE}}` is the file that holds `ADO_PAT`) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; roster authors = that same list **without** removing yourself; paths default under your `%USERPROFILE%`.
+> **Identity & paths are injected by the wrapper.** `{{CURRENT_USER}}` (your GitHub login), `{{REVIEW_AUTHORS}}` (your teammates — the roster minus you), `{{ROSTER_AUTHORS}}` (the FULL roster **including you** — a convention reference only, never a review filter), `{{OUTPUT_DIR}}`, `{{SCHEDULED_DIR}}`, `{{REPO_ROOT}}`, and `{{ADO_ORG}}` / `{{ADO_PROJECT}}` / `{{ENV_FILE}}` (the first two may be **empty** — ADO credentials are optional, see Phase 1e; `{{ENV_FILE}}` is the file that holds `ADO_PAT`) are filled in before you run. If you ever see a literal `{{...}}` still in this text (e.g. a manual run), self-detect: current user = `gh api user -q .login`; review authors = the `members[].github` in `team-roster.json` at the repo root, minus yourself; roster authors = that same list **without** removing yourself; paths default under your `%USERPROFILE%`; `{{FETCH_STATUS}}` (see Execution environment) defaults to `ok` unless your own `git fetch origin` fails.
 
 You are running as a Windows scheduled task. Your job is to **perform a full semantic code review of open Pull Requests** in `nelnet-nbs/sis-externalapi` and **write a self-contained HTML report per PR** to a local output folder for the user to validate. **This is a READ-ONLY review: you do NOT comment on, approve, request changes to, or otherwise touch any PR on GitHub, and you do NOT modify the git working tree.** The only files you create are the HTML reports in the output folder (plus throwaway temp files).
 
@@ -18,7 +18,9 @@ The user has **explicitly authorized this scheduled task to run the review auton
 
 ## Execution environment
 
-You are running inside the user's main repo at `{{REPO_ROOT}}` on whatever branch the user left it on. The wrapper has already run `git fetch --prune origin` so `origin/main` and PR refs are current. Do not assume you are on `main` and do not change branches.
+You are running inside the user's main repo at `{{REPO_ROOT}}` on whatever branch the user left it on. Do not assume you are on `main` and do not change branches.
+
+- **Wrapper fetch status: `{{FETCH_STATUS}}`.** `ok` means the wrapper's `git fetch --prune origin` succeeded, so `origin/main` and PR refs are current and every `git fetch` / `git show` path below works. **`failed` means git-over-HTTPS cannot reach the remote from this process** — typically the git credential lost its `nelnet-nbs` SSO grant while the `gh` token still works (the wrapper logs `Pre-flight DEGRADED`). When it is `failed`, do **not** spend a call re-trying `git fetch`: it will fail again with exit 128. Read PR-head files via `gh api` instead (see Phase 1), and treat locally-cached `origin/main` refs as possibly stale.
 
 - **GitHub access:** the `gh` CLI is authenticated for `nelnet-nbs`. Use it for all PR metadata, diffs, and file contents. If `gh auth status` fails, STOP (see Pre-flight).
   - **If a repo-scoped call returns `HTTP 403 "Resource protected by organization SAML enforcement"`** (the keyring token passed `gh auth status` but lost its SSO grant — this happened in the 2026-08-24 run), do NOT declare fatal and do NOT try the REST/GraphQL variants in turn: the wrapper already probes for this and exports `GH_TOKEN` from `GITHUB_TOKEN` in `{{ENV_FILE}}` when it can, so you inherit a working credential. If you still get 403, set it yourself once — `$env:GH_TOKEN = <the GITHUB_TOKEN value from {{ENV_FILE}}>` — retry, and note the fallback in the run summary. Only STOP if that fails too.
@@ -142,6 +144,21 @@ git show refs/pr-review/<n>:<path/to/File.cs>     # whole file at PR head, forwa
 git show origin/main:<path/to/File.cs>            # base version for context (no ref needed)
 ```
 
+**Gate: only take that path when `{{FETCH_STATUS}}` is `ok`.** When it is `failed`, git-over-HTTPS is already
+known broken for this process — skip the `git fetch` above entirely (re-trying it cost a wasted call and a
+re-plan in the 2026-08-24 11:18 run: `fatal: unable to access … 403`, exit 128) and read the files straight
+out of the `gh` API, which uses the working `GH_TOKEN` credential:
+
+```
+$sha = '<headRefOid from the gh pr view call above>'
+gh api "repos/nelnet-nbs/sis-externalapi/contents/<path/to/File.cs>?ref=$sha" -H "Accept: application/vnd.github.raw"
+```
+
+Batch these in one PowerShell call per small group of paths (a `foreach` over a `$paths` array), keeping each
+tool result under the ~25 KB ceiling. `origin/main` versions still come from the local clone via
+`git show origin/main:<path>` — that needs no network — but say so in the run summary, because a failed fetch
+means `origin/main` may lag the real base.
+
 Read the full content of every changed `.cs` file (skip binaries; for deleted files just note the deletion). **Also read `src/Applications.SISApi/SISApi.API/Assets/PublicChangeLog.md` in full at PR head if it is among the changed files** — R4 needs its text to apply §15. Cite real line numbers from the PR-head file. **As soon as you have cached the text, delete the temp ref** — do not leave it open while sub-agents run:
 
 ```
@@ -165,7 +182,11 @@ A Gateway GET endpoint is a thin wrapper over a domain microservice's **client l
    ```
    git show refs/pr-review/<n>:src/Applications.SISApi/SISApi.API/SISApi.API.csproj
    ```
-   Find `<PackageReference Include="SIS.{Domain}.Service.Client" Version="X.Y.Z" />`. Use that exact version (the PR may have bumped it — always take the PR-head value, not `origin/main`).
+   (When `{{FETCH_STATUS}}` is `failed` there is no temp ref — use the `gh api …/contents/<path>?ref=$sha` form
+   from Phase 1 instead.) Find `<PackageReference Include="SIS.{Domain}.Service.Client" Version="X.Y.Z" />`.
+   Use that exact version, read **at PR head** — never from a diff hunk and never from `origin/main`. A hunk's
+   unchanged context lines can be stale: in the 2026-08-24 11:18 run the patch showed `Version="8.0.39"` while
+   head was `8.0.41`, which would have produced a false "compile break" finding had it not been re-read.
 3. **Locate the restored assembly** in the NuGet cache:
    ```
    ~/.nuget/packages/sis.{domain}.service.client/{X.Y.Z}/lib/net8.0/{Domain}.Service.Client.dll
@@ -331,6 +352,19 @@ In a **single message, make five `Agent` tool calls at once** (`subagent_type: g
 > — is a visible regression, not a silent one. `k` must be 5 (or the number of reviewers with in-scope
 > files, if the PR touches fewer file kinds). Emitting this marker in a message that contains **no** `Agent`
 > call means you are about to serialize: stop and batch the remaining reviewers instead.
+>
+> **Recovery rule — this has regressed twice (2026-08-18, 2026-08-24 11:18), so read it before you dispatch.**
+> The failure shape is always the same: the `FANOUT` marker goes out in a text-only message, then the
+> reviewers follow one per message, ~70–90 s apart. In the 2026-08-24 run that burned **5m36s of a 13m run**
+> on turn-taking alone while the reviewers themselves ran in 2–64 s each. So:
+> - Do not announce the fan-out and then compose. Compose all five briefs **first**, silently; the marker and
+>   the five `Agent` blocks go out together in one message, marker last.
+> - If you nonetheless find that you have already dispatched fewer than `k` reviewers, **the very next
+>   message must carry every remaining `Agent` call** — do not continue one at a time to "finish what you
+>   started". Recovering at reviewer 2 saves most of the loss; recovering at reviewer 4 saves almost none.
+> - The five briefs share most of their text (rubric preamble, `ALREADY RAISED`, the guards, the finding
+>   shape). Compose that shared block once and reuse it verbatim across all five rather than re-deriving it
+>   per reviewer — re-composition is what makes the one-per-message habit feel cheaper than it is.
 
 | Reviewer | Rubric sections (from `pr-review-standards.md`) | Files in scope | Emits categories |
 |---|---|---|---|
@@ -542,7 +576,7 @@ PRIOR (PR #<n>): <k> existing comment(s), <d> finding(s) suppressed as already-r
 
 ```
 PR REVIEW RUN COMPLETE (<ISO timestamp>)
-Candidates: <count from Step 1 before idempotency/approved skips>
+Candidates: <every open PR the Step 1 query returned, before ANY skip — eligibility, idempotency or approved>
 Reviewed:   <n reviewed>   Skipped: <n skipped>  (approved: <a>, unchanged: <u>, not-eligible: <e>)
 
 Reports written to {{OUTPUT_DIR}}\ :
