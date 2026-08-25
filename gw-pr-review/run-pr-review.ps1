@@ -121,9 +121,19 @@ if (-not $ghOk) {
 # the env file (a classic PAT keeps its SSO grant; the agent proved this fallback works).
 # Setting GH_TOKEN here fixes git fetch, the pre-check, AND the claude child process, which
 # inherits this environment -- so the agent no longer has to rediscover the fallback itself.
+# gh reports the SAML 403 as a human-readable message AND repeats the same text as a raw JSON
+# body -- ~1.1 KB on one line in the 2026-08-25 run. The post-run log review reads the whole log,
+# so cap it: 500 chars keeps the actionable part (the .../sso?authorization_request=... URL) and
+# drops the duplicated JSON.
+function Format-GhProbeError {
+    param([string]$text)
+    $t = ($text.Trim() -replace '\s+', ' ')
+    if ($t.Length -gt 500) { $t = $t.Substring(0, 500) + '...' }
+    return $t
+}
 $ghProbe = gh api 'repos/nelnet-nbs/sis-externalapi' --jq '.full_name' 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
-    Write-Log ("WARN: 'gh auth status' passed but the repo-scoped probe failed -- " + ($ghProbe.Trim() -replace '\s+', ' '))
+    Write-Log ("WARN: 'gh auth status' passed but the repo-scoped probe failed -- " + (Format-GhProbeError $ghProbe))
     if ($GhPat) {
         $env:GH_TOKEN = $GhPat
         $env:GITHUB_TOKEN = $GhPat
@@ -133,7 +143,7 @@ if ($LASTEXITCODE -ne 0) {
         } else {
             Remove-Item Env:GH_TOKEN     -ErrorAction SilentlyContinue
             Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-            Write-Log ("WARN: GITHUB_TOKEN from $EnvFile cannot reach the repo either -- " + ($ghProbe.Trim() -replace '\s+', ' '))
+            Write-Log ("WARN: GITHUB_TOKEN from $EnvFile cannot reach the repo either -- " + (Format-GhProbeError $ghProbe))
             Write-Log "       Fix once (interactively): authorize the token for the 'nelnet-nbs' org SSO. See $ScheduledDir\README-pr-review.md."
         }
     } else {
@@ -176,12 +186,6 @@ try {
     $branchBefore = (git rev-parse --abbrev-ref HEAD 2>&1).Trim()
     $headBefore   = (git rev-parse HEAD 2>&1).Trim()
     Write-Log "Branch before: $branchBefore   HEAD before: $headBefore"
-
-    # Fetch is read-only w.r.t. the working tree; makes origin/main + PR refs current.
-    Write-Log "Fetching origin (prune) ..."
-    $fetchOk = $true
-    git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
-    if ($LASTEXITCODE -ne 0) { $fetchOk = $false; Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
 
     # Snapshot existing reports so we can report just this run's output.
     $reportsBefore = @{}
@@ -234,6 +238,22 @@ try {
         }
     } catch {
         Write-Log "Pre-check error (non-fatal): $_  -- launching claude anyway."
+    }
+
+    # Fetch is read-only w.r.t. the working tree; makes origin/main + PR refs current for the
+    # claude launch. Deliberately AFTER the pre-check and skipped on a no-op run: the pre-check
+    # reads only `gh pr list` (network) and local report filenames, so it has no dependency on
+    # local refs. Fetching first made every skip run pay for a fetch nothing consumed -- and on
+    # 2026-08-25 10:00 it also spilled a 4-line SAML-403 failure cascade into a run whose very
+    # next line was "nothing new to review". Matches the ms-pr-review sibling.
+    # $null = never attempted (no-op run); $true/$false = origin refs are/aren't current. Both
+    # consumers below (the pre-flight milestone and {{FETCH_STATUS}}) run only when NOT skipping.
+    $fetchOk = $null
+    if (-not $skipClaude) {
+        Write-Log "Fetching origin (prune) ..."
+        git fetch --prune origin 2>&1 | ForEach-Object { Write-Log "[git fetch] $_" }
+        $fetchOk = ($LASTEXITCODE -eq 0)
+        if (-not $fetchOk) { Write-Log "WARN: git fetch failed (exit=$LASTEXITCODE) -- continuing; gh calls may still work." }
     }
 
     # ----- stream-json event parser (detailed log + PR-review milestones) ---
