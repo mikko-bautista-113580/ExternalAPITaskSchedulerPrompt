@@ -115,6 +115,12 @@ if (Test-Path $LockFile) {
 }
 "$TaskName $Timestamp PID=$PID" | Out-File -FilePath $LockFile -Encoding utf8
 
+# Wall-clock + authoritative run cost, mirroring the other four wrappers. The post-run log
+# reviewer (lib\log-review.ps1) keys its cost guard on the "Run cost:" milestone emitted at the
+# end of this run -- without these this job could never match the $0 skip.
+$runStart = Get-Date
+$script:TotalCostUsd = 0.0
+
 try {
     # ---- ADO discovery pre-check (skip-if-nothing-to-do) --------------------
     # Mirrors admission-ms: resolve the CURRENT sprint for the team, then look for
@@ -567,6 +573,7 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
             if ($ev.type -eq 'result') {
                 $sub  = $ev.subtype
                 $cost = $ev.total_cost_usd
+                if ($null -ne $ev.total_cost_usd) { $script:TotalCostUsd = [double]$ev.total_cost_usd }
                 $dur  = [math]::Round($ev.duration_ms / 1000, 1)
                 $writeCount = $script:milestones.FileWriteCount
                 $ready   = @($script:milestones.TicketDone.GetEnumerator() | Where-Object { $_.Value -eq 'READY' }).Count
@@ -770,6 +777,11 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
     if ($script:milestones.BranchName -and $script:milestones.BranchName -ne $branchName) {
         Write-Log "WARN: claude reported working on '$($script:milestones.BranchName)' but the wrapper assigned '$branchName'."
     }
+    # ---- always surface this run's cost + wall-clock duration ----
+    # Same format as the other four wrappers; lib\log-review.ps1 matches the "$0.000000" form
+    # to decide whether the post-run reviewer is worth launching. Do not change the N6 format.
+    $wallDur = [math]::Round(((Get-Date) - $runStart).TotalSeconds, 1)
+    Write-Milestone '$' ("Run cost: `${0:N6}, duration {1}s" -f $script:TotalCostUsd, $wallDur)
 
 } finally {
     Remove-Item -Force $LockFile -ErrorAction SilentlyContinue

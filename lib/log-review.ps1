@@ -12,6 +12,10 @@
 # current source, applies validated fixes as UNCOMMITTED edits to the automation repo, and
 # writes a markdown report next to the log. It NEVER commits/pushes and NEVER touches the
 # target repo. See lib\log-review-prompt.md for the reviewer instructions.
+#
+# COST GUARD: if the run being reviewed cost $0 (claude never launched, or launched and billed
+# $0), the reviewer is NOT launched at all -- unconditionally, regardless of exit code or any
+# WARN/FATAL lines in the log. A $0 run did no work worth paying a second Opus launch to review.
 
 $script:LogReviewLibDir = $PSScriptRoot   # ...\lib
 
@@ -90,16 +94,20 @@ function Invoke-LogReview {
     $logText = Get-Content -Path $LogFile -Raw -ErrorAction SilentlyContinue
     if (-not $logText) { Write-RvLog "SKIP: log is empty."; return }
 
-    # ---- 2. no-work skip (cost guard) ----------------------------------------
-    # Only skip a truly clean no-op: exit 0, the run cost $0 (claude never launched), no
-    # problem signals. Keyed on the wrapper's authoritative end-of-run cost milestone
-    # ("Run cost: $0.000000  (claude launched: no)") — NOT on the word "launching", because
-    # the skip milestone literally says "Not launching claude", which a naive substring match
-    # would misread as a launch. Failed runs and any run with WARN/FATAL/errors are always reviewed.
-    $costZero    = ($logText -match 'claude launched:\s*no') -or ($logText -match 'Run cost:\s*\$?0\.0+(\s|,|$)')
-    $hadProblems = $logText -match 'WARN:|FATAL|FAILED|\[claude:tool<-ERROR\]|Exit code [1-9]|exit code [1-9]'
-    if ($ExitCode -eq 0 -and $costZero -and -not $hadProblems) {
-        Write-RvLog "No-work run (cost `$0, no problems) — nothing to review; no report generated, claude not launched."
+    # ---- 2. cost guard: a $0 run is never reviewed ---------------------------
+    # The reviewer is a second Opus launch and costs real money. If the run itself cost nothing
+    # (claude never launched, or launched and billed $0), there is nothing worth paying to review.
+    # Keyed on the wrapper's authoritative end-of-run cost milestone
+    # ("Run cost: $0.000000  (claude launched: no)") — NOT on the word "launching", because the
+    # skip milestone literally says "Not launching claude", which a naive substring match would
+    # misread as a launch. This is UNCONDITIONAL: exit code and WARN/FATAL lines do NOT override
+    # it. The previous version also required exit 0 and a WARN-free log, and in practice a single
+    # benign WARN: (e.g. the chronically un-SSO-authorized gh probe) vetoed the skip and bought a
+    # full Opus reviewer launch on 1.4s no-op runs. Accepted tradeoff: a claude hard-crash that
+    # never emitted a result event bills $0, so it is skipped too.
+    $costZero = ($logText -match 'claude launched:\s*no') -or ($logText -match 'Run cost:\s*\$?0\.0+(\s|,|$)')
+    if ($costZero) {
+        Write-RvLog "Run cost `$0 — nothing to review; no report generated, claude not launched."
         Prune-Reviews
         return
     }

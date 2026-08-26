@@ -131,22 +131,33 @@ function Format-GhProbeError {
     if ($t.Length -gt 500) { $t = $t.Substring(0, 500) + '...' }
     return $t
 }
+# Do NOT log the probe failure as WARN before the fallback outcome is known. On this machine the
+# keyring token is chronically un-SSO-authorized, so the probe fails and the GITHUB_TOKEN fallback
+# recovers it on EVERY run -- a "WARN:" for a failure that was immediately recovered is simply
+# inaccurate, and it trains the reader (and the post-run reviewer) to ignore real warnings.
+# Buffer the error, then level it: recovered -> informational; unrecovered -> the same WARN lines
+# and remediation hint as before.
+# (This leveling was applied 2026-08-25 16:00 and lost when bba8db6 committed a pre-fix copy of
+# this block -- keep it when committing changes here.)
 $ghProbe = gh api 'repos/nelnet-nbs/sis-externalapi' --jq '.full_name' 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
-    Write-Log ("WARN: 'gh auth status' passed but the repo-scoped probe failed -- " + (Format-GhProbeError $ghProbe))
+    $probeErr = Format-GhProbeError $ghProbe
     if ($GhPat) {
         $env:GH_TOKEN = $GhPat
         $env:GITHUB_TOKEN = $GhPat
-        $ghProbe = gh api 'repos/nelnet-nbs/sis-externalapi' --jq '.full_name' 2>&1 | Out-String
+        $ghProbe2 = gh api 'repos/nelnet-nbs/sis-externalapi' --jq '.full_name' 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0) {
-            Write-Log "Fell back to GITHUB_TOKEN from $EnvFile -- repo access restored ($($ghProbe.Trim()))."
+            Write-Log ("Active gh credential could not reach the repo (recovered on the next line) -- " + $probeErr)
+            Write-Log "Fell back to GITHUB_TOKEN from $EnvFile -- repo access restored ($($ghProbe2.Trim()))."
         } else {
             Remove-Item Env:GH_TOKEN     -ErrorAction SilentlyContinue
             Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-            Write-Log ("WARN: GITHUB_TOKEN from $EnvFile cannot reach the repo either -- " + (Format-GhProbeError $ghProbe))
+            Write-Log ("WARN: 'gh auth status' passed but the repo-scoped probe failed -- " + $probeErr)
+            Write-Log ("WARN: GITHUB_TOKEN from $EnvFile cannot reach the repo either -- " + (Format-GhProbeError $ghProbe2))
             Write-Log "       Fix once (interactively): authorize the token for the 'nelnet-nbs' org SSO. See $ScheduledDir\README-pr-review.md."
         }
     } else {
+        Write-Log ("WARN: 'gh auth status' passed but the repo-scoped probe failed -- " + $probeErr)
         Write-Log "       No GITHUB_TOKEN in $EnvFile to fall back to. Fix once (interactively): re-authorize the gh token for the 'nelnet-nbs' org SSO."
     }
 }

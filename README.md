@@ -124,7 +124,10 @@ the current source, and writes a markdown report next to the log
 - **Validity is enforced twice:** the reviewer parse-checks any `.ps1` it edits, and the wrapper
   parse-gates the result — a changed script that doesn't parse is automatically reverted, so a
   broken script can never reach the next run.
-- **Clean no-op runs are skipped** (no claude launched, exit 0, no warnings) to avoid cost.
+- **Any $0 run is skipped.** If the run being reviewed cost nothing (claude never launched, or
+  launched and billed $0), the reviewer is not launched at all — unconditionally, regardless of
+  exit code or `WARN`/`FATAL` lines in the log. A $0 run did no work worth paying a second Opus
+  launch to review. Every wrapper emits an authoritative `Run cost: $X` milestone that this keys on.
 - **New shared files:** `lib/log-review.ps1` (the `Invoke-LogReview` function) and
   `lib/log-review-prompt.md` (the reviewer engine) — dot-sourced by every wrapper, no per-job code.
 
