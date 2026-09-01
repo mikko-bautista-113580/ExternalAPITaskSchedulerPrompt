@@ -320,6 +320,12 @@ try {
                 # clock each, ~5 min of a 12-min run). Per-message batch size makes that visible without
                 # doing timestamp arithmetic across the "Dispatched sub-agent #N" lines.
                 $agentBatch = 0
+                # Claim made by THIS message (0 = none). A FANOUT marker in a message that carries no Agent
+                # block is the announce-then-compose failure shape: in the 2026-08-28 run the marker went out
+                # at 15:12:12 and the first reviewer 52s later, in its own message. The existing WARN below
+                # only fires on the first lone Agent call and misreports it as "this message carried 1 Agent
+                # call" -- the message that actually broke the rule carried zero. Flag that one directly.
+                $fanoutClaimedHere = 0
                 foreach ($block in $ev.message.content) {
                     if ($block.type -eq 'tool_use' -and ($block.name -eq 'Bash' -or $block.name -eq 'PowerShell')) {
                         $cmd = $block.input.command
@@ -346,6 +352,7 @@ try {
                         # new fan-out (next PR), so reset the dispatched-so-far counter with it.
                         if ($txt -match 'FANOUT \(PR #\d+\):\s*(\d+)\s*reviewer') {
                             $script:m.FanoutClaim = [int]$Matches[1]; $script:m.FanoutSeen = 0
+                            $fanoutClaimedHere = $script:m.FanoutClaim
                         }
                         if (-not $script:m.ReviewListSeen -and $txt -match 'PRs to review:\s*(.+)') {
                             $script:m.ReviewListSeen = $true; Write-Milestone '>' "PRs to review: $($Matches[1].Trim())"
@@ -359,6 +366,9 @@ try {
                         # milestone count is right even if per-PR markers weren't emitted verbatim.
                         if ($txt -match '(?m)^\s*Reviewed:\s+(\d+)\b') { $script:m.Reviewed = [int]$Matches[1] }
                     }
+                }
+                if ($fanoutClaimedHere -ge 2 -and $agentBatch -eq 0) {
+                    Write-Log ("WARN: fan-out ANNOUNCED-ONLY -- FANOUT marker claimed {0} reviewer(s) 'dispatched in this message' but this message carried NO Agent call. The reviewers are about to be serialized one per message; see Phase 2 in pr-review-prompt.md (compose all briefs first, marker last, same message)." -f $fanoutClaimedHere)
                 }
                 if ($agentBatch -gt 0) {
                     # Serialized only while the claimed batch is still incomplete -- once FanoutSeen has

@@ -108,6 +108,16 @@ gh pr diff <n> --repo nelnet-nbs/sis-externalapi
 
 `files[]` gives `path`, `additions`, `deletions`. Determine each file's status (added / modified / removed) from the diff headers.
 
+**`gh pr view --json files` is capped at 100 entries** — it silently truncates, it does not error. So compare
+`files.Count` against `changedFiles`, and when `changedFiles > 100` get the full list from the REST endpoint
+instead (in the 2026-08-28 run PR #212 had `changedFiles: 112`; `gh pr view --json files … | Select-Object -Skip 100`
+returned nothing, and the missing 12 files cost a wasted call plus a re-plan onto this form):
+
+```
+gh api repos/nelnet-nbs/sis-externalapi/pulls/<n>/files --paginate \
+  --jq '.[] | "\(.additions)\t\(.deletions)\t\(.status)\t\(.filename)"'
+```
+
 **Also gather CI status and prior review activity** — two cheap reads that change what is worth reporting:
 
 ```
@@ -143,6 +153,13 @@ git fetch --no-tags --force origin pull/<n>/head:refs/pr-review/<n>
 git show refs/pr-review/<n>:<path/to/File.cs>     # whole file at PR head, forward-slash path
 git show origin/main:<path/to/File.cs>            # base version for context (no ref needed)
 ```
+
+**Run the `git fetch` on its own, and pipe its output away** (`git fetch … 2>&1 | Out-Null`, then confirm with
+`git rev-parse refs/pr-review/<n>`). Do not stack it in front of a `git show` batch: in the 2026-08-28 run the
+fetch's multi-line `From https://github.com/…` banner rode along with the first file dump and pushed that one
+tool result to 53.5 KB, which spilled it to a temp file. **Cap each `git show` batch at ~2 files or ~600 lines**
+(whichever comes first) so no result crosses the ~25 KB ceiling — the same run spilled a second 33.3 KB batch and
+paid an extra `Read` round trip to get the text back.
 
 **Gate: only take that path when `{{FETCH_STATUS}}` is `ok`.** When it is `failed`, git-over-HTTPS is already
 known broken for this process — skip the `git fetch` above entirely (re-trying it cost a wasted call and a
@@ -320,6 +337,13 @@ Ask the one question the rulebook cannot: **does this PR do what the ticket aske
 
    These fields are HTML — strip tags before reading them. On any error (404, expired PAT, wrong project),
    log `STORY-ALIGN SKIPPED (PR #<n>): <reason>` and continue. Never fail the PR over this.
+
+   **A 404 on one PR's id proves nothing about the next PR's id — never skip pre-emptively.** Each PR gets its
+   own fetch attempt, in its own Phase 1e, before that PR's Phase 2. In the 2026-08-28 run id 256296 (PR #216)
+   404'd, so PR #212 was logged as `STORY-ALIGN SKIPPED (PR #212): ADO 301648 not attempted — same renweb PAT
+   path returned 404 for the sibling id this run` — then 301648 was fetched anyway after Phase 4 and resolved
+   fine, leaving two contradictory markers for one PR. **Emit exactly one `STORY-ALIGN` line per PR**, and emit
+   it from Phase 1e, not later.
 4. **Compare at a high level only** — this is a sanity check, not a second rubric:
    - endpoint path + HTTP method the ticket specifies vs. what the controller actually exposes
    - the **ViewModels** field list the ticket carries vs. what the PR's `Output` advertises (this pairs
@@ -345,6 +369,14 @@ In a **single message, make five `Agent` tool calls at once** (`subagent_type: g
 > the fan-out costs ~5–6 minutes of wall clock per PR for zero benefit (the reviewers are independent and
 > share no state). If a brief feels too large to compose alongside the other four, trim the inlined file
 > text for that reviewer — do **not** trade the parallelism away.
+>
+> **Budget: ~600 lines of inlined file text per brief, hard cap** — this is what makes the one-message rule
+> achievable. "Trim if it feels too large" has been ignored in every regression so far because no number was
+> attached to it. Inline the **full** text only of files under ~300 lines; for anything larger, inline the
+> changed hunks plus ~40 lines of context, line-numbered from the PR-head file, and say so in the brief
+> (*"excerpted — line numbers are the real head-file line numbers"*). No reviewer gets a file outside its own
+> scope column, and R4's "all changed `.cs` files" means at excerpt fidelity — not five copies of the same
+> full text across five briefs.
 >
 > **Self-check marker (mandatory).** In the **same assistant message** that carries the `Agent` calls,
 > print `FANOUT (PR #<n>): <k> reviewer(s) dispatched in this message`. The wrapper independently logs how
