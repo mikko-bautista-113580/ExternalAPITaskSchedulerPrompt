@@ -15,7 +15,11 @@ The wrapper owns discovery and naming; the prompt just executes:
   + title contains `ExternalAPIGW`), fetches the titles, and appends an authoritative **Runtime inputs**
   block to the prompt with the sprint, the ticket list, the target branch, and the branch mode. If nothing
   is eligible it exits 0 before touching git.
-- **Branch name** — one ticket → `story/<id>`; several → `story/<id1>_<id2>_<id3>`.
+- **Branch name** — one ticket → `story/<id>`; several → `story/<id1>_<id2>_<id3>`. The wrapper has to name the
+  branch from the *eligible* list before any work happens, so at exit the prompt **trims the name to the tickets
+  that actually produced files** (`git branch -m`, `create` mode only) and logs `BRANCH RENAMED: <old> -> <new>`.
+  A ticket that failed at parse or on a missing upstream client generated nothing, so it drops out of the name;
+  one that failed at build/coverage keeps its ID, because its files are still on the branch.
 - **Branch mode** — `create` for a free name; `reuse` when the branch already exists and has *not* diverged
   from `origin/main` (safe to continue on top); otherwise a unique `story/<ids>-2`, `-3`, … So a re-run on the
   same ticket set continues the existing branch instead of aborting.

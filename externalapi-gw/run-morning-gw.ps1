@@ -472,6 +472,19 @@ Leave the generated files UNCOMMITTED on the branch -- do not commit, push, or o
                     # to echo "TICKET {id} VIEWMODELS PARSED" and "TEST SUITES ENUMERATED" markers).
                     if ($block.type -eq 'text' -and $block.text) {
                         $txt = $block.text
+                        # Step 14 trims the branch name down to the tickets that actually produced
+                        # files, so the name captured from the Step 3 checkout above goes stale the
+                        # moment a ticket fails with zero output (2026-09-01: 256328 was blocked on a
+                        # missing upstream client and generated nothing, yet the branch stayed
+                        # story/256328_256342_256352). Without this the wrapper's own "On branch ..."
+                        # line and the final summary disagree about where the user's work lives.
+                        # De-duped on the resulting name: the marker is emitted once by step 14e and
+                        # again inside the final summary block, so an ungated match would log twice.
+                        if ($txt -match 'BRANCH RENAMED:\s*(\S+)\s*->\s*(\S+)' -and
+                            $script:milestones.BranchName -ne $Matches[2]) {
+                            $script:milestones.BranchName = $Matches[2]
+                            Write-Milestone '→' "Branch renamed $($Matches[1]) -> $($Matches[2]) (dropped tickets that generated no files)"
+                        }
                         # Per-ticket markers: iterate ALL matches, and de-dupe per ticket id
                         # rather than run-wide, so every ticket reports its own progress.
                         foreach ($mm in [regex]::Matches($txt, 'TICKET\s+(\d+)\s+VIEWMODELS PARSED')) {

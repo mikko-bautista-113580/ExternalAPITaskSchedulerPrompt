@@ -5,6 +5,7 @@ You are running as a Windows scheduled task. Your job is to **scaffold the Gatew
 **All-tickets-one-branch policy.** Process **every** ticket in the Runtime inputs list, in ascending ID order, and put all of them on the **one** branch the wrapper assigned. The branch is named after every ticket it carries — a single ticket gives `story/{id}`, several give `story/{id1}_{id2}_{id3}` (ascending, underscore-separated). One branch means the user's eventual push is **one PR** covering the whole sprint's Gateway work instead of one PR per ticket.
 
 - Never create a second branch mid-run, and never switch away from the assigned branch between tickets.
+- **The branch name is trimmed at exit to the tickets it actually carries.** A ticket that failed *before writing any file* is dropped from the name by Step 14 — see Exit behavior. That is a rename of the one branch (`git branch -m`), not a second branch and not a switch.
 - A ticket that fails is **isolated**: log `TICKET {id} FAILED (<reason>)`, leave whatever it produced in place, and continue to the next ticket. One bad ticket must not abort the run or discard another ticket's work.
 - Every ticket in the list must end with exactly one `TICKET {id} READY` or `TICKET {id} FAILED (<reason>)` line. The wrapper greps for these to report per-ticket progress; a ticket with no verdict is reported as a defect.
 
@@ -32,6 +33,7 @@ Two narrow exceptions:
 - ❌ NO `git stash`, `git reset --hard`, `git restore`, `git clean`, or anything that could discard files. The user's uncommitted WIP and the files you just generated must all stay visible in the working tree.
 - ❌ NO `git checkout main` (or any branch switch) after you've created the target branch. Stay on it at exit so the user finds their repo on that branch with every ticket's generated files visible.
 - ❌ NO creating a second branch mid-run. All tickets share the one branch from the Runtime inputs block — that is what makes them a single PR.
+  - ✅ **Single carve-out:** the Step 14 exit rename, `git branch -m <old> <new>`, run **once** after the final build. It renames the branch you are already standing on — HEAD keeps pointing at the same commit, no checkout happens, and every modified and untracked file stays exactly where it is (verified: `git status --porcelain` is byte-identical before and after). Use `-m`, **never `-M`** — `-m` refuses with exit 128 if the target name is taken, which is the safety net you want.
 - ❌ NO reverting, deleting, or `git checkout`-ing a file another ticket in this run generated or modified. A failing ticket cleans up **only its own** changes (and only via `Edit`).
 - ❌ NO `claude_self_reviewed` PR comments (no PR exists to comment on).
 
@@ -381,9 +383,53 @@ Now loop over the tickets from the Runtime inputs block, **ascending by ID**, st
 
     ⚠️ **False-failure guard.** This final build runs immediately after the last ticket's build and coverage run, so the previous MSBuild node may still hold the output files. If a build reports `Build FAILED` / a non-zero exit but prints **no** `error CS…` or `error MSB…` line, that is a file lock, not a code error. Re-run **once** with `/nodeReuse:false` and accept that result — do not rebuild a third time to confirm (2026-08-14: two extra full rebuilds, ~3.5 min, to prove a lock).
 
+14. **Trim the branch name to the tickets it actually carries.** Run this ONCE, after the final build, before the summary. The wrapper had to name the branch from the *eligible* list before any work happened, so a ticket that turned out to be undeliverable is still in that name — on 2026-09-01 the branch was `story/256328_256342_256352` even though 256328 generated nothing at all (`FAILED (upstream client missing: SIS.Admissions.Service.Client 8.0.191 lacks IOARequestInfoAnswerClient/OARequestInfoAnswerDto)`). A name that advertises a ticket with no code in it misleads the eventual PR title, the `AB#` commit-message list, and anyone reading `git branch`.
+
+    **14a. Compute the surviving ID set.** Keep a ticket's ID if it is `READY`, **or** if it is `FAILED` but left files on disk. Drop it **only** when the ticket wrote nothing — which is exactly these two verdicts:
+
+    - `FAILED (ticket parse: <reason>)` — step 9 mandates "continue to the next ticket **without writing anything for it**"
+    - `FAILED (upstream client missing: <pkg> <ver> lacks <types>)` — step 10's tier 5 reverts the ticket's own csproj bump and generates no files
+
+    A `FAILED (build)`, `FAILED (coverage: …)`, or `FAILED (file-set mismatch: …)` ticket **keeps its ID** — its generated files are still sitting on the branch, and a branch that carries a ticket's code must be named for it. Do not infer "wrote nothing" from the verdict text alone: confirm against the per-ticket file list you emitted in step 12. If a ticket you were about to drop turns out to have files in `git status --porcelain`, keep its ID and log `BRANCH RENAME: kept {id} (verdict said zero files but <n> are on disk)`.
+
+    **14b. Gates — skip the rename entirely if any of these holds.** In each case log the line and go straight to the summary with the original name:
+
+    - **`Branch mode` is `reuse`** → `BRANCH RENAME SKIPPED (reuse mode): <branch>`. A reused branch pre-exists and may already carry commits or a remote counterpart from an earlier run; renaming it orphans that history and breaks the user's `git push`.
+    - **The surviving set equals the full ticket list** (nothing to drop) → no rename, no log line. This is the normal case.
+    - **The surviving set is empty** (every ticket failed with zero files) → `BRANCH RENAME SKIPPED (no tickets delivered): <branch>`. There is no `story/` name to rename to. Stay on the branch; the working tree is clean in this case, so the wrapper's next-run guard will not block.
+
+    **14c. Resolve a free name.** The wrapper only guaranteed uniqueness for the *original* name, so the shortened one may already be taken by an earlier run. Build `story/<surviving ids ascending, underscore-separated>` and check both refs — the wrapper already refreshed the remote ones, so this is local and cheap:
+
+    ```
+    git rev-parse --verify --quiet refs/heads/<new>
+    git rev-parse --verify --quiet refs/remotes/origin/<new>
+    ```
+
+    If either resolves, append `-2`, then `-3`, … until both are free (same rule the wrapper's `Get-UniqueBranch` uses). If you somehow cannot find a free name in 10 tries, keep the original and log `BRANCH RENAME SKIPPED (no free name): <branch>`.
+
+    **14d. Rename, then verify.** Use `-m`, never `-M`:
+
+    ```
+    git branch -m <old> <new>
+    git rev-parse --abbrev-ref HEAD      # must print <new>
+    git status --porcelain               # must be identical to before the rename
+    ```
+
+    `-m` exits 128 and changes nothing if the target name exists — if that happens, keep the original name and log `BRANCH RENAME SKIPPED (name taken: <new>)` rather than retrying with `-M`. If `git status --porcelain` differs from what it was before the rename, that is a defect: report it loudly in the summary and do not attempt any repair.
+
+    **14e. Log exactly one marker line**, and then use the **new** name everywhere in the summary — the `Repo is now on branch:` line, the `git push -u origin HEAD` guidance, and the `git branch -D <targetBranch>` discard hint:
+
+    ```
+    BRANCH RENAMED: <old> -> <new> (dropped <id>[, <id>…]: zero files generated)
+    ```
+
+    The literal prefix `BRANCH RENAMED:` is required — the wrapper greps for it to correct the branch name it captured back at the Step 3 checkout. Do **not** drop a ticket from the summary itself: every ticket in the Runtime inputs list still gets its `Result:` line with its `FAILED` reason, whether or not its ID survived into the branch name.
+
 ## Exit behavior
 
 **Do NOT switch back to main** — the user wants their repo left on the target branch with every ticket's generated files visible in the working tree.
+
+**Step 14 has already run**, so `<targetBranch>` below means the **post-rename** name (`git rev-parse --abbrev-ref HEAD`), not the name from the Runtime inputs block. Read it from git rather than copying it from the input; they differ whenever a ticket was dropped.
 
 Print a final summary in this exact format (one line per ticket, in ascending ID order):
 
@@ -409,7 +455,9 @@ Test-case association (ADO 'Test Case Global Repo'):
 Upstream client bumps (uncommitted in SISApi.API.csproj):
   - <package> <old> → <new>   (needed by {id})     (or "none")
 
-Repo is now on branch: <targetBranch>   (all {n} tickets share this ONE branch → ONE PR)
+BRANCH RENAMED: <old> -> <new> (dropped <id>: zero files generated)     (omit this line entirely when no rename happened)
+
+Repo is now on branch: <targetBranch>   (all {n} delivered tickets share this ONE branch → ONE PR)
 Files to review ({total} files across {n} tickets):
   <combined list, grouped by ticket, A=added M=modified, one per line>
   <shared files touched by more than one ticket, noted as such>
@@ -417,7 +465,8 @@ Files to review ({total} files across {n} tickets):
 Next steps for the user:
   - To review:               git diff origin/main      (shows everything generated, all tickets)
   - To commit + push:        git add <files>
-                             git commit -m "AB#{id1} AB#{id2} AB#{id3} [ExternalAPIGW] GET endpoints: <Resource1>, <Resource2>, <Resource3>"
+                             git commit -m "AB#{id1} AB#{id2} [ExternalAPIGW] GET endpoints: <Resource1>, <Resource2>"
+                             (list ONLY the tickets in the branch name — a dropped ticket has no code here, so an AB# link for it would attach an artifact to a story this commit does not implement)
                              git push -u origin HEAD
                              (use `git push -u origin HEAD` — it pushes to a same-named remote branch and sets upstream correctly; a plain `git push` may fail because this branch has no upstream yet)
                              (ADO links every AB#<id> in the commit message to its ticket — include ALL of them so each ticket gets the artifact link, not just the first)
