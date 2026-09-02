@@ -30,6 +30,13 @@ You are running inside the user's main repo at `{{REPO_ROOT}}` on whatever branc
   Keep every tool result under ~25 KB — anything larger is spilled to a temp file and costs an extra round
   trip to re-read it: project `gh` output with `--jq`, aggregate `gh pr checks` with `Group-Object` instead
   of dumping it raw, and bound repo-wide `Grep` sweeps with `head_limit` / `output_mode: files_with_matches`.
+  - **A search that errored or timed out is not evidence of absence.** An unscoped `Grep` over this repo hits
+    the 20 s ripgrep limit (`Ripgrep search timed out after 20 seconds` — 2026-09-02 run), and that result
+    means *unknown*, not *zero matches*. Always scope repo-wide searches with a `path` (e.g.
+    `src/Applications.SISApi/SISApi.APITests`); and when the claim is about a **git ref** rather than the
+    working tree, use `git grep -n <pattern> origin/main -- <path>` — a working-tree `Grep` cannot prove
+    anything about `origin/main`. If the search still fails, re-run it narrower or drop the claim; never
+    convert a failed search into a "there are zero X in the codebase" statement.
 - **Reference material on disk (read these; they are the review rubric):**
   - `{{SCHEDULED_DIR}}\pr-review-standards.md` — the authoritative coding-standards rulebook (REQUIRED=error, RECOMMENDED=warning, NICE-TO-HAVE=info). This is the primary source of truth for findings.
   - `.claude/commands/GWEndpointsGenerator/generate-get-endpoint.md` — the GW GET endpoint conventions + "Endpoint Validation Checklist" + "Reference Object Rules". Apply this additionally to any PR that adds/changes a GET endpoint.
@@ -385,6 +392,16 @@ In a **single message, make five `Agent` tool calls at once** (`subagent_type: g
 > files, if the PR touches fewer file kinds). Emitting this marker in a message that contains **no** `Agent`
 > call means you are about to serialize: stop and batch the remaining reviewers instead.
 >
+> **The marker is a self-check, not a run-log line — never defer it.** It does not belong in the fenced
+> marker block you print at the end of a phase alongside `REFPR` / `STORY-ALIGN` / `CI` / `PRIOR`. In the
+> 2026-09-02 run the five reviewers went out one per message (14:06:38 → 14:12:06) and the
+> `FANOUT (PR #218): 5 reviewer(s) dispatched in this message` line was only printed at 14:13:03, next to
+> *"All five reviewers returned"* — a marker emitted after the reviewers have returned asserts something
+> that is provably false and defeats the only check that catches this regression. If you are writing the
+> marker and the `Agent` calls are not in the very same message you are composing, the run has already
+> regressed: say so plainly in the marker (`FANOUT (PR #<n>): <k> reviewer(s) SERIALIZED — marker post-hoc`)
+> rather than claiming a batch that did not happen.
+>
 > **Recovery rule — this has regressed twice (2026-08-18, 2026-08-24 11:18), so read it before you dispatch.**
 > The failure shape is always the same: the `FANOUT` marker goes out in a text-only message, then the
 > reviewers follow one per message, ~70–90 s apart. In the 2026-08-24 run that burned **5m36s of a 13m run**
@@ -499,6 +516,13 @@ Each verifier returns one of:
 - `WRONG_SEVERITY` — a real observation but not a REQUIRED violation (should be a warning/info).
 
 **Uphold on uncertainty:** if the verifier cannot clearly disprove it, keep it as `UPHELD`. Only `error` findings are verified (warnings/info pass through unchanged).
+
+**Never inline "no precedent exists" unless a search actually proved it.** A verifier has no tools, so a
+line like *"`origin/main` has zero `catch` blocks anywhere in `SISApi.APITests`"* is taken at face value and
+can carry an `UPHELD` on its own — that is exactly what happened on 2026-09-02, where the sweep behind that
+claim had timed out. Only state an absence in a brief when the search that established it **completed**
+(scoped `git grep` against the ref, per "Shell & result size"); otherwise write *"no precedent search was
+possible"* and let the verifier judge on the rule text and sibling evidence alone.
 
 ### Phase 5 — Finalize, score & render (orchestrator)
 

@@ -271,7 +271,7 @@ try {
     # FanoutClaim/FanoutSeen: the orchestrator prints "FANOUT (PR #n): <k> reviewer(s) dispatched in this
     # message" before Phase 2. Comparing that claim against the per-message Agent-block count turns a
     # serialized fan-out into a greppable WARN instead of a note nobody reads (see Track-Milestones).
-    $script:m = @{ GhSeen=$false; GitSeen=$false; ReviewListSeen=$false; Reviewed=0; AgentsDispatched=0; FanoutClaim=0; FanoutSeen=0 }
+    $script:m = @{ GhSeen=$false; GitSeen=$false; ReviewListSeen=$false; Reviewed=0; AgentsDispatched=0; FanoutClaim=0; FanoutSeen=0; AgentsSinceFanout=0; SoloMsgsSinceFanout=0 }
     $script:TotalCostUsd = 0.0
 
     # NOTE: the parameter is $toolInput, NOT $input. `$input` is a PowerShell automatic variable
@@ -325,7 +325,13 @@ try {
                 # at 15:12:12 and the first reviewer 52s later, in its own message. The existing WARN below
                 # only fires on the first lone Agent call and misreports it as "this message carried 1 Agent
                 # call" -- the message that actually broke the rule carried zero. Flag that one directly.
+                # ...and the mirror-image shape, seen 2026-09-02: the marker is emitted POST-HOC, after all
+                # five reviewers have already gone out one per message. Both the prompt's self-check and this
+                # detector were blind to it -- FanoutClaim was still 0 while the splits happened, so each was
+                # logged as a benign "batch: 1" note, and the reset at the marker then made the lone Phase 4
+                # verifier look like reviewer 1 of 5. Carry the count across the marker instead of resetting.
                 $fanoutClaimedHere = 0
+                $postHocSolo = 0
                 foreach ($block in $ev.message.content) {
                     if ($block.type -eq 'tool_use' -and ($block.name -eq 'Bash' -or $block.name -eq 'PowerShell')) {
                         $cmd = $block.input.command
@@ -349,10 +355,16 @@ try {
                         $txt = $block.text
                         # Remember how many reviewers the orchestrator SAYS it batched, so the
                         # per-message Agent count below can contradict it. A new FANOUT line starts a
-                        # new fan-out (next PR), so reset the dispatched-so-far counter with it.
+                        # new fan-out (next PR), so rebase the dispatched-so-far counter on it.
                         if ($txt -match 'FANOUT \(PR #\d+\):\s*(\d+)\s*reviewer') {
-                            $script:m.FanoutClaim = [int]$Matches[1]; $script:m.FanoutSeen = 0
+                            $script:m.FanoutClaim = [int]$Matches[1]
                             $fanoutClaimedHere = $script:m.FanoutClaim
+                            # Credit reviewers already dispatched for this fan-out (post-hoc marker) rather
+                            # than resetting to 0; capped at the claim so stray Phase 4 verifiers can't inflate it.
+                            $script:m.FanoutSeen = [Math]::Min($script:m.AgentsSinceFanout, $script:m.FanoutClaim)
+                            $postHocSolo = $script:m.SoloMsgsSinceFanout
+                            $script:m.AgentsSinceFanout = 0
+                            $script:m.SoloMsgsSinceFanout = 0
                         }
                         if (-not $script:m.ReviewListSeen -and $txt -match 'PRs to review:\s*(.+)') {
                             $script:m.ReviewListSeen = $true; Write-Milestone '>' "PRs to review: $($Matches[1].Trim())"
@@ -368,12 +380,22 @@ try {
                     }
                 }
                 if ($fanoutClaimedHere -ge 2 -and $agentBatch -eq 0) {
-                    Write-Log ("WARN: fan-out ANNOUNCED-ONLY -- FANOUT marker claimed {0} reviewer(s) 'dispatched in this message' but this message carried NO Agent call. The reviewers are about to be serialized one per message; see Phase 2 in pr-review-prompt.md (compose all briefs first, marker last, same message)." -f $fanoutClaimedHere)
+                    if ($postHocSolo -ge 2) {
+                        Write-Log ("WARN: fan-out SERIALIZED (post-hoc marker) -- FANOUT marker claimed {0} reviewer(s) 'dispatched in this message', but this message carried NO Agent call and {1} reviewer(s) had ALREADY gone out one per message before the marker. Each split costs ~1 min of dead wall clock; see Phase 2 in pr-review-prompt.md (marker and all Agent calls in ONE message, marker last -- never after the reviewers return)." -f $fanoutClaimedHere, $postHocSolo)
+                    } else {
+                        Write-Log ("WARN: fan-out ANNOUNCED-ONLY -- FANOUT marker claimed {0} reviewer(s) 'dispatched in this message' but this message carried NO Agent call. The reviewers are about to be serialized one per message; see Phase 2 in pr-review-prompt.md (compose all briefs first, marker last, same message)." -f $fanoutClaimedHere)
+                    }
                 }
                 if ($agentBatch -gt 0) {
                     # Serialized only while the claimed batch is still incomplete -- once FanoutSeen has
                     # caught up to the claim, a lone Agent call is a Phase 4 verifier and legitimate.
                     $serialized = ($agentBatch -eq 1 -and $script:m.FanoutClaim -ge 2 -and $script:m.FanoutSeen -lt $script:m.FanoutClaim)
+                    # Count lone Agent messages that could still be fan-out splits, so a marker arriving later
+                    # can name them. Verifiers dispatched after a complete fan-out are excluded.
+                    if ($agentBatch -eq 1 -and ($script:m.FanoutClaim -eq 0 -or $script:m.FanoutSeen -lt $script:m.FanoutClaim)) {
+                        $script:m.SoloMsgsSinceFanout++
+                    }
+                    $script:m.AgentsSinceFanout += $agentBatch
                     $script:m.FanoutSeen += $agentBatch
                     if ($serialized) {
                         Write-Log ("WARN: fan-out SERIALIZED -- FANOUT marker claimed {0} reviewer(s) but this message carried 1 Agent call ({1}/{0} dispatched so far). Each split costs ~1 min of dead wall clock; see Phase 2 in pr-review-prompt.md." -f $script:m.FanoutClaim, $script:m.FanoutSeen)
